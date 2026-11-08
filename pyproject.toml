@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crashlens"
+version = "0.1.0"
+description = "Windows 11 troubleshooting: crash/BSOD analysis, health scan, approval-based repairs, shareable reports."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PySide6-Essentials>=6.6"]
+dev = ["pytest>=8", "pytest-qt>=4.4", "ruff>=0.5", "PySide6-Essentials>=6.6"]
+build = ["pyinstaller>=6"]
+
+[project.scripts]
+crashlens = "crashlens.cli:main"
+
+[project.gui-scripts]
+crashlens-gui = "crashlens.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+crashlens = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM"]
+# S603/S607: subprocess use is centralised and audited in core/runner.py
+# SIM112: Windows environment variable names are case-insensitive
+ignore = ["S603", "S607", "SIM112"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108"]

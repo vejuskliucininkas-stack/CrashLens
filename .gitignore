@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.spec.bak
+
+# Secrets - never commit
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+secrets/
+**/secrets.*
+openai_key*
+api_key*
+
+# Local output
+reports/
+crashlens-*.html
+crashlens-*.json
+crashlens-*.md
+*.dmp
+audit.log
+
+# Review packets are regenerated; reviews themselves are kept
+review/packets/*
+!review/packets/.gitkeep
+
+# OS
+Thumbs.db
+.DS_Store
