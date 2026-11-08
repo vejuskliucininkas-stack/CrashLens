@@ -22,6 +22,10 @@ _BUGCHECK_RE = re.compile(r"bug ?check was:?\s*(0x[0-9a-fA-F]+)\s*(?:\(([^)]*)\)
 _DUMP_RE = re.compile(r"dump was saved in:?\s*(\S.*?\.dmp)", re.I)
 
 
+def times(n: int) -> str:
+    return {1: "once", 2: "twice"}.get(n, f"{n} times")
+
+
 def _fmt_time(t: datetime | None) -> str:
     return t.strftime("%Y-%m-%d %H:%M UTC") if t else "unknown time"
 
@@ -158,7 +162,7 @@ def incidents_to_findings(incidents: list[Incident], days: int) -> list[Finding]
                 severity=_count_severity(n),
                 category=Category.CRASH,
                 summary=(
-                    f"Windows crashed with this stop code {n} time(s) in the last {days} days. "
+                    f"Windows crashed with this stop code {times(n)} in the last {days} days. "
                     f"{kb.meaning}"
                 ),
                 details="Likely causes: " + "; ".join(kb.likely_causes) + ".",
@@ -174,12 +178,12 @@ def incidents_to_findings(incidents: list[Incident], days: int) -> list[Finding]
         n = len(no_code)
         forced = sum(1 for i in no_code if i.forced_power_off)
         summary = (
-            f"The PC restarted or switched off without shutting down properly {n} time(s) in "
+            f"The PC restarted or switched off without shutting down properly {times(n)} in "
             f"the last {days} days, and no blue screen was recorded. That usually means a "
             "sudden power loss, a complete freeze, or the power button being held down."
         )
         if forced:
-            summary += f" The power button was used to force it off {forced} time(s)."
+            summary += f" The power button was used to force it off {times(forced)}."
         findings.append(
             Finding(
                 id="unexpected-restart",
@@ -267,7 +271,7 @@ class GraphicsDriverCheck(Check):
             severity=Severity.MEDIUM if n >= 3 else Severity.LOW,
             category=Category.DRIVERS,
             summary=(
-                f"{names} stopped responding and was restarted by Windows {n} time(s) in the "
+                f"{names} stopped responding and was restarted by Windows {times(n)} in the "
                 f"last {ctx.lookback_days} days. You may have seen the screen go black briefly."
             ),
             evidence=tuple(_fmt_time(e.time) for e in tdrs[:MAX_EVIDENCE]),
@@ -470,7 +474,7 @@ class AppCrashCheck(Check):
                     severity=sev,
                     category=Category.APP,
                     summary=(
-                        f"{app} closed unexpectedly {n} time(s). The fault was in "
+                        f"{app} closed unexpectedly {times(n)}. The fault was in "
                         f"{module_name}" + (f" ({hint})" if hint else "") + "."
                     ),
                     details="Error: " + _exc_text(first.datum(6)),
@@ -493,7 +497,7 @@ class AppCrashCheck(Check):
                     title=f"{app} stopped responding" + (f" {n} times" if n > 1 else ""),
                     severity=Severity.LOW if n >= 5 else Severity.INFO,
                     category=Category.APP,
-                    summary=f"{app} froze and had to be closed {n} time(s).",
+                    summary=f"{app} froze and had to be closed {times(n)}.",
                     evidence=tuple(_fmt_time(e.time) for e in items[:MAX_EVIDENCE]),
                     recommendations=(
                         f"Update {app}.",
