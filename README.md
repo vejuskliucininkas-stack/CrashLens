@@ -95,7 +95,7 @@ This creates `dist\CrashLens\CrashLens.exe` (desktop app) and
 
 ```
 pip install -e ".[dev]"
-pytest                    # 110+ tests; GUI tests run headless
+pytest                    # 115 tests; GUI tests run headless
 ruff check src tests      # lint
 python scripts/secret_scan.py
 ```

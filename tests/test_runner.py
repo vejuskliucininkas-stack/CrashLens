@@ -72,3 +72,10 @@ def test_subprocess_runner_does_not_interpret_shell_metacharacters(tmp_path):
 def test_subprocess_runner_rejects_empty():
     with pytest.raises(ValueError):
         SubprocessRunner().run([])
+
+
+def test_subprocess_runner_open_off_windows():
+    if sys.platform == "win32":
+        pytest.skip("would really open something")
+    res = SubprocessRunner().open("ms-settings:windowsupdate")
+    assert res.not_found and not res.ok

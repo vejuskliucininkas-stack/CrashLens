@@ -11,6 +11,7 @@ Rules enforced here (see docs/SECURITY.md):
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -46,6 +47,14 @@ class CommandResult:
 class CommandRunner(Protocol):
     def run(self, args: Sequence[str], timeout: float = DEFAULT_TIMEOUT) -> CommandResult: ...
 
+    def open(self, target: str, arguments: str = "") -> CommandResult:
+        """Open a document, URI or program the way Explorer would (ShellExecute).
+
+        Needed for tools whose manifest asks for elevation (mmc.exe, mdsched.exe):
+        CreateProcess refuses them with error 740, ShellExecute shows UAC instead.
+        """
+        ...
+
 
 class SubprocessRunner:
     """Real runner used on Windows."""
@@ -73,6 +82,22 @@ class SubprocessRunner:
         except (FileNotFoundError, PermissionError, OSError) as exc:
             return CommandResult(argv, -1, "", str(exc), not_found=True)
         return CommandResult(argv, proc.returncode, _decode(proc.stdout), _decode(proc.stderr))
+
+    def open(self, target: str, arguments: str = "") -> CommandResult:
+        argv = (target, arguments) if arguments else (target,)
+        startfile = getattr(os, "startfile", None)
+        if startfile is None:
+            return CommandResult(argv, -1, "", "only available on Windows", not_found=True)
+        try:
+            if arguments:
+                startfile(target, "open", arguments)
+            else:
+                startfile(target)
+        except OSError as exc:
+            # 1223 = the user cancelled the UAC prompt
+            code = getattr(exc, "winerror", None) or -1
+            return CommandResult(argv, code, "", str(exc), not_found=code != 1223)
+        return CommandResult(argv, 0)
 
 
 def _decode(data: bytes | str | None) -> str:
@@ -174,6 +199,14 @@ class FakeRunner:
         handler = self.commands.get(exe)
         if handler is None:
             return CommandResult(argv, -1, "", f"{exe}: not found (fake)", not_found=True)
+        return handler(argv) if callable(handler) else handler
+
+    def open(self, target: str, arguments: str = "") -> CommandResult:
+        argv = (target, arguments) if arguments else (target,)
+        self.calls.append(("open", *argv))
+        handler = self.commands.get("open")
+        if handler is None:
+            return CommandResult(argv, 0)
         return handler(argv) if callable(handler) else handler
 
 

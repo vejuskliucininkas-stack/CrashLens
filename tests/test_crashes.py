@@ -175,3 +175,38 @@ def test_reliability_index(ctx, fake):
     assert f.severity == Severity.MEDIUM and "4.2" in f.title
     fake.queries["cim.reliability"] = []
     assert ReliabilityCheck().run(ctx).status == CheckStatus.UNAVAILABLE
+
+
+def test_localised_bugcheck_uses_event_data(ctx, fake):
+    # German Windows: translated message, but untranslated insertion strings.
+    msg = "Der Computer wurde nach einem schwerwiegenden Fehler neu gestartet."
+    fake.queries["events.system_crash"] = [
+        evt(
+            1001,
+            WER,
+            "2026-11-07T08:00:05Z",
+            msg,
+            ["0x0000009f (0x3, 0xffff, 0xfff8, 0xffb2)", "C:\\Windows\\MEMORY.DMP", "abc"],
+        )
+    ]
+    [f] = BlueScreenCheck().run(ctx).findings
+    assert f.id == "bsod-9f"
+    assert "MEMORY.DMP" in f.evidence[0] and "0x3, 0xffff" in f.evidence[0]
+
+
+def test_localised_tdr_uses_first_data_field(ctx, fake):
+    fake.queries["events.system_crash"] = [
+        evt(4101, "Display", "2026-11-03T10:00:00Z", "Anzeigetreiber reagiert nicht", ["amdkmdag"])
+    ]
+    [f] = GraphicsDriverCheck().run(ctx).findings
+    assert "amdkmdag" in f.summary
+
+
+def test_exception_code_decimal_and_hex():
+    from crashlens.checks.crashes import parse_exception_code
+
+    assert parse_exception_code("c0000005") == 0xC0000005
+    assert parse_exception_code("0xc0000409") == 0xC0000409
+    assert parse_exception_code("3221225477") == 0xC0000005  # decimal form
+    assert parse_exception_code("80000003") == 0x80000003  # 8-digit hex stays hex
+    assert parse_exception_code("") is None

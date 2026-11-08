@@ -42,7 +42,9 @@ recommendations and `repair_ids` pointing into the repair catalog.
 
 **Repairs.** `repairs/catalog.py` is a fixed list. Each repair either runs a
 built-in Windows tool (SFC, DISM, chkdsk /scan, restore point) or opens a Windows
-page (Device Manager, Windows Update, ...). `RepairExecutor.execute()` requires an
+page (Device Manager, Windows Update, ...). "Open" entries go through ShellExecute
+(`CommandRunner.open`, like double-clicking) because tools such as `mmc.exe` and
+`mdsched.exe` require elevation, which `CreateProcess` refuses with error 740. `RepairExecutor.execute()` requires an
 `Approval` from `ApprovalRegistry.grant()`: single use, tied to one repair, expires
 after 10 minutes. The GUI grants one only after the approval dialog is confirmed;
 the CLI only after the user types `RUN`. Admin tools started without admin rights

@@ -195,11 +195,16 @@ class RepairExecutor:
             raise NotSupportedError("Repairs can only run on Windows.")
 
         if repair.kind is RepairKind.OPEN:
-            res = self.runner.run(argv, timeout=repair.timeout_s)
-            if res.not_found:
-                outcome = RepairOutcome(repair_id, "failed", f"Could not open: {res.stderr}")
+            res = self.runner.open(repair.argv[0], " ".join(repair.argv[1:]))
+            if res.returncode == 1223:
+                outcome = RepairOutcome(
+                    repair_id, "cancelled", "Administrator permission was not given.", 1223
+                )
+            elif not res.ok:
+                outcome = RepairOutcome(
+                    repair_id, "failed", f"Could not open it: {res.stderr}", res.returncode
+                )
             else:
-                # explorer.exe often returns 1 even when it opened the page.
                 outcome = RepairOutcome(repair_id, "launched", f"Opened: {repair.title}.")
         elif elevate:
             res = self.runner.run(argv, timeout=120)

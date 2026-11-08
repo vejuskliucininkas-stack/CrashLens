@@ -4,7 +4,7 @@ Version 0.1.0. Updated as work lands.
 
 ## How it has been tested
 
-- 110 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
+- 115 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
   fictional Windows data (`FakeRunner`, demo mode).
 - **Not yet run on a real Windows 11 PC.** Two live tests
   (`tests/test_windows_live.py`) and a CI job on `windows-latest` are written to do
@@ -68,9 +68,10 @@ Project
 1. **Unverified on real Windows.** PowerShell output shapes, property names and
    timings are based on documentation. Expect some checks to need adjustment after
    the first real run (task T-12).
-2. **Localised Windows.** Graphics-reset driver names and parts of blue-screen
-   parsing read the English event message text. Stop codes have a fallback via the
-   event data fields, but non-English systems need checking (T-14).
+2. **Localised Windows.** Blue-screen codes, parameters, dump paths and graphics
+   driver names fall back to the untranslated event data fields when the message
+   is not English (tested with German text). Not yet verified on a real
+   non-English system (T-14).
 3. **No culprit driver from dumps yet.** Only the dump header (stop code and
    parameters) is read; CrashLens does not yet list the drivers loaded at crash
    time (T-15).

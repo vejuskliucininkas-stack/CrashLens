@@ -144,12 +144,26 @@ def test_uac_declined_is_cancelled(tmp_path):
     assert res.status == "cancelled"
 
 
-def test_open_kind_does_not_elevate(tmp_path):
-    runner = FakeRunner(commands={"explorer.exe": CommandResult(("e",), 1, "")})
+def test_open_kind_uses_shell_open(tmp_path):
+    runner = FakeRunner()
     ex = make_executor(runner, admin=False, tmp_path=tmp_path)
     res = ex.execute("open_windows_update", ex.approvals.grant("open_windows_update", "gui"))
     assert res.status == "launched"
-    assert runner.calls == [("explorer.exe", "ms-settings:windowsupdate")]
+    assert runner.calls == [("open", "ms-settings:windowsupdate")]
+    res = ex.execute(
+        "open_reliability_monitor", ex.approvals.grant("open_reliability_monitor", "x")
+    )
+    assert runner.calls[-1] == ("open", "perfmon.exe", "/rel")
+
+
+def test_open_kind_uac_cancel_and_failure(tmp_path):
+    runner = FakeRunner(commands={"open": CommandResult(("mdsched.exe",), 1223, "", "cancelled")})
+    ex = make_executor(runner, admin=False, tmp_path=tmp_path)
+    res = ex.execute("memory_diagnostic", ex.approvals.grant("memory_diagnostic", "gui"))
+    assert res.status == "cancelled"
+    runner.commands["open"] = CommandResult(("x",), 2, "", "not found", not_found=True)
+    res = ex.execute("open_device_manager", ex.approvals.grant("open_device_manager", "gui"))
+    assert res.status == "failed" and "not found" in res.message
 
 
 def test_dry_run_never_executes(tmp_path):

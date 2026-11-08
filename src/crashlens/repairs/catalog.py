@@ -19,6 +19,8 @@ from enum import Enum
 class RepairKind(str, Enum):
     TOOL = "tool"  # runs a built-in Windows repair or diagnostic tool
     OPEN = "open"  # opens a Windows page or tool; the user decides what to do there
+    # OPEN entries are started with ShellExecute (like double-clicking): argv[0] is the
+    # document, URI or program and argv[1:] are its arguments.
 
 
 @dataclass(frozen=True)
@@ -151,7 +153,7 @@ def _build() -> dict[str, Repair]:
             description="Shows every device and its driver. Update or roll back drivers here.",
             what_happens="Opens Device Manager. Nothing is changed unless you change it.",
             kind=RepairKind.OPEN,
-            argv=("mmc.exe", "devmgmt.msc"),
+            argv=("devmgmt.msc",),
         ),
         Repair(
             id="open_windows_update",
@@ -160,7 +162,7 @@ def _build() -> dict[str, Repair]:
             what_happens="Opens Settings > Windows Update. Nothing is installed automatically "
             "by CrashLens.",
             kind=RepairKind.OPEN,
-            argv=("explorer.exe", "ms-settings:windowsupdate"),
+            argv=("ms-settings:windowsupdate",),
         ),
         Repair(
             id="open_windows_security",
@@ -169,7 +171,7 @@ def _build() -> dict[str, Repair]:
             what_happens="Opens the Windows Security app. CrashLens never changes security "
             "settings.",
             kind=RepairKind.OPEN,
-            argv=("explorer.exe", "windowsdefender:"),
+            argv=("windowsdefender:",),
         ),
         Repair(
             id="open_reliability_monitor",
@@ -185,7 +187,7 @@ def _build() -> dict[str, Repair]:
             description="Choose which programs start with Windows.",
             what_happens="Opens Settings > Apps > Startup. You decide what to turn off.",
             kind=RepairKind.OPEN,
-            argv=("explorer.exe", "ms-settings:startupapps"),
+            argv=("ms-settings:startupapps",),
         ),
         Repair(
             id="open_storage_settings",
@@ -194,7 +196,7 @@ def _build() -> dict[str, Repair]:
             what_happens="Opens Settings > System > Storage. Nothing is deleted unless you "
             "choose to delete it there.",
             kind=RepairKind.OPEN,
-            argv=("explorer.exe", "ms-settings:storagesense"),
+            argv=("ms-settings:storagesense",),
         ),
     ]
     return {r.id: r for r in items}

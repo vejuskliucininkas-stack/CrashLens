@@ -96,9 +96,15 @@ def test_system_state(ctx, fake):
 
 
 def test_updates_age(ctx, fake):
-    fake.queries["cim.hotfix"] = {"HotFixID": "KB1", "InstalledOn": "2026-10-30T00:00:00Z"}
+    fake.queries["updates.last_install"] = {
+        "Title": "Update (KB1234567)",
+        "InstalledOn": "2026-10-30T00:00:00Z",
+    }
     assert UpdatesCheck().run(ctx).findings == []
-    fake.queries["cim.hotfix"] = {"HotFixID": "KB1", "InstalledOn": "2026-07-01T00:00:00Z"}
+    fake.queries["updates.last_install"] = {
+        "Title": "Update (KB1234567)",
+        "InstalledOn": "2026-07-01T00:00:00Z",
+    }
     [f] = UpdatesCheck().run(ctx).findings
     assert f.severity == Severity.HIGH
 

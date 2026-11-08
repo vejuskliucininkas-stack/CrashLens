@@ -154,7 +154,11 @@ def demo_runner(now: datetime | None = None) -> FakeRunner:
                 "FreeKB": 5.5 * 1024 * 1024,
                 "RebootPending": True,
             },
-            "cim.hotfix": {"HotFixID": "KB5043178", "InstalledOn": _t(now, 52)},
+            "updates.last_install": {
+                "Title": "2026-09 Cumulative Update for Windows 11 Version 24H2 for "
+                "x64-based Systems (KB5043178)",
+                "InstalledOn": _t(now, 52),
+            },
             "cim.antivirus": {
                 "displayName": "Microsoft Defender Antivirus",
                 "productState": 397568,

@@ -60,12 +60,20 @@ def _parse_bugcheck_event(e: ev.EventRecord) -> Incident | None:
     if code is None:
         return None
     dm = _DUMP_RE.search(text)
+    dump = dm.group(1).strip() if dm else None
+    if dump is None:
+        # Localised Windows: the message text is translated, but the event data is not.
+        dump = next((d.strip() for d in e.data[1:3] if d.strip().lower().endswith(".dmp")), None)
+    params = (m.group(2) or "").strip() if m else ""
+    if not params:
+        pm = re.search(r"\(([^)]*)\)", e.datum(0))
+        params = pm.group(1).strip() if pm else ""
     return Incident(
         time=e.time,
         code=code,
-        params=(m.group(2) or "").strip() if m else "",
+        params=params,
         sources={"Event 1001 (BugCheck)"},
-        dump=dm.group(1).strip() if dm else None,
+        dump=dump,
     )
 
 
@@ -245,6 +253,15 @@ class BlueScreenCheck(Check):
 # --------------------------------------------------------------------------- #
 
 
+def _tdr_driver(e: ev.EventRecord) -> str:
+    m = re.search(r"driver\s+(\S+)\s+stopped", e.message, re.I)
+    if m:
+        return m.group(1)
+    # Localised Windows: the driver name is the event's first insertion string.
+    first = e.datum(0).strip()
+    return first if re.fullmatch(r"[\w.-]{2,64}", first) else ""
+
+
 class GraphicsDriverCheck(Check):
     id = "crash.graphics"
     name = "Graphics driver resets"
@@ -258,11 +275,8 @@ class GraphicsDriverCheck(Check):
         if not tdrs:
             return [], "No graphics driver resets."
         n = len(tdrs)
-        drivers = Counter(
-            m.group(1)
-            for e in tdrs
-            if (m := re.search(r"driver\s+(\S+)\s+stopped", e.message, re.I))
-        )
+        drivers = Counter(_tdr_driver(e) for e in tdrs)
+        drivers.pop("", None)
         names = ", ".join(d for d, _ in drivers.most_common(3)) or "the display driver"
         latest = max((e.time for e in tdrs if e.time), default=None)
         finding = Finding(
@@ -420,8 +434,18 @@ MODULE_HINTS = {
 MAX_APP_FINDINGS = 8
 
 
+def parse_exception_code(code_s: str) -> int | None:
+    """Application Error stores the code as hex text ('c0000005'), but some systems
+    deliver it as a decimal number ('3221225477'). Error codes are >= 0x80000000,
+    which is always 10 decimal digits, while the hex form is at most 8 characters."""
+    s = (code_s or "").strip()
+    if s.isdigit() and len(s) == 10:
+        return int(s, 10)
+    return parse_code(s if s.lower().startswith("0x") else f"0x{s}") if s else None
+
+
 def _exc_text(code_s: str) -> str:
-    code = parse_code(code_s if code_s.lower().startswith("0x") else f"0x{code_s}")
+    code = parse_exception_code(code_s)
     if code is None:
         return code_s or "unknown error"
     return f"{format_code(code)} - {EXCEPTION_NAMES.get(code, 'error')}"

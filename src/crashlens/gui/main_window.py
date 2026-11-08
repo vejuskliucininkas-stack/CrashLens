@@ -727,6 +727,8 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
         pair = (thread, worker)
         self._threads.append(pair)
         thread.finished.connect(

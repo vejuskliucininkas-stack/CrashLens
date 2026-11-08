@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import zlib
 from datetime import timedelta
 
@@ -391,13 +392,32 @@ class SystemStateCheck(Check):
 # Updates
 # --------------------------------------------------------------------------- #
 
-HOTFIX_QUERY = PsQuery(
-    "cim.hotfix",
-    "Get-CimInstance -ClassName Win32_QuickFixEngineering "
-    "| Where-Object { $_.InstalledOn } | Sort-Object InstalledOn -Descending "
-    "| Select-Object -First 1 HotFixID,"
-    "@{n='InstalledOn';e={([datetime]$_.InstalledOn).ToUniversalTime().ToString('o')}}",
+# Last successful update install. Windows Update history first (dates are UTC);
+# Defender definition / platform updates and the Malicious Software Removal Tool are
+# ignored because they keep arriving even when Windows updates are stuck. Falls back
+# to Get-HotFix (local time) when the Windows Update API is unavailable.
+LAST_UPDATE_QUERY = PsQuery(
+    "updates.last_install",
+    "$d=$null; $t=$null; $src='WindowsUpdate'; "
+    "try { $q=(New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher(); "
+    "$n=$q.GetTotalHistoryCount(); if ($n -gt 0) { "
+    "$h=$q.QueryHistory(0,[Math]::Min($n,300)) | Where-Object { $_.ResultCode -eq 2 -and "
+    "$_.Operation -eq 1 -and $_.Title -notmatch "
+    "'Security Intelligence|Definition Update|antimalware platform|Malicious Software' } "
+    "| Sort-Object Date -Descending | Select-Object -First 1; "
+    "if ($h) { $d=[datetime]::SpecifyKind($h.Date,'Utc'); $t=$h.Title } } } catch {} "
+    "if (-not $d) { $src='HotFix'; $h=Get-HotFix | Where-Object { $_.InstalledOn } "
+    "| Sort-Object InstalledOn -Descending | Select-Object -First 1; "
+    "if ($h) { $d=([datetime]$h.InstalledOn).ToUniversalTime(); $t=$h.HotFixID } } "
+    "if ($d) { [pscustomobject]@{ Title=$t; InstalledOn=$d.ToString('o'); Source=$src } }",
+    timeout=120,
 )
+
+
+def _short_update_name(title: str) -> str:
+    """'2026-10 Cumulative Update for Windows 11 ... (KB5043178)' -> 'KB5043178'."""
+    m = re.search(r"\bKB\d{6,8}\b", title)
+    return m.group(0) if m else (title[:60] + "..." if len(title) > 60 else title)
 
 
 class UpdatesCheck(Check):
@@ -405,11 +425,11 @@ class UpdatesCheck(Check):
     name = "Windows updates"
 
     def collect(self, ctx: CheckContext) -> tuple[list[Finding], str]:
-        rows = run_ps_json(ctx.runner, HOTFIX_QUERY)
+        rows = run_ps_json(ctx.runner, LAST_UPDATE_QUERY)
         if not rows:
             raise Unavailable("Update history is not available.")
         last = ev.parse_time(rows[0].get("InstalledOn"))
-        kb = rows[0].get("HotFixID") or "update"
+        kb = _short_update_name(str(rows[0].get("Title") or "update"))
         if last is None:
             raise Unavailable("The date of the last update is unknown.")
         age = (ctx.now - last).days
