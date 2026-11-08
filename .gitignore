@@ -37,3 +37,4 @@ review/packets/*
 # OS
 Thumbs.db
 .DS_Store
+setup-log.txt
