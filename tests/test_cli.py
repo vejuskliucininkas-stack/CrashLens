@@ -43,8 +43,11 @@ def test_report_and_overwrite_protection(tmp_path):
     target = tmp_path / "r.html"
     code, out = run(["--demo", "report", str(target)])
     assert code == 0 and target.exists()
-    code, out = run(["--demo", "report", str(target)])
+    env = build_environment(demo=True, audit_path=tmp_path / "a.log")
+    calls_before = len(env.runner.calls)
+    code, out = run(["--demo", "report", str(target)], env=env)
     assert code == 1 and "already exists" in out
+    assert len(env.runner.calls) == calls_before  # refused before scanning
     assert run(["--demo", "report", str(tmp_path / "r.pdf")])[0] == 2
 
 

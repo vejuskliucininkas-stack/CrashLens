@@ -199,6 +199,9 @@ def main(
         if not 1 <= args.days <= 365:
             print("--days must be between 1 and 365", file=sys.stderr)
             return 2
+        if args.output.exists() and not args.force:
+            print(f"{args.output} already exists. Use --force to replace it.", file=out)
+            return 1
         report = _scan(env, args.days, out)
         try:
             path = write_report(
