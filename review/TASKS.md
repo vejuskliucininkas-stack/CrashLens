@@ -16,9 +16,13 @@ section. Review findings that need work get a task here with their R-ID.
   event data fields, not English message text, wherever possible
 - T-15 Kernel minidump: list loaded third-party drivers to point at likely culprits
 - T-16 Optional: export report as PDF
+- T-18 Show the 'changes before crashes' timeline as a chart in the app
 
 ## Done
 
+- T-17 "What changed before the crashes" + failing Windows updates
+- T-16a Self-review fixes: ShellExecute for elevated tools, Windows Update history,
+  localised event fallbacks, decimal exception codes
 - T-10 Review system for ChatGPT (this folder + scripts)
 - T-09 Desktop app (Overview, Problems, Checks, Repairs, Report) and CLI
 - T-08 Shareable reports (HTML/Markdown/JSON) with redaction

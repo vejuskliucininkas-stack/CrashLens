@@ -102,12 +102,62 @@ def demo_runner(now: datetime | None = None) -> FakeRunner:
 
     storage = [_ev(153, "disk", _t(now, d), "", level=3) for d in (2, 9, 12)]
 
+    driver_installs = [
+        _ev(
+            20001,
+            "Microsoft-Windows-UserPnp",
+            _t(now, 22.4),
+            "Driver Management concluded the process to install driver "
+            "nv_dispig.inf_amd64_8c2f for Device Instance ID PCI\\VEN_10DE&DEV_2504 "
+            "with the following status: 0x0.",
+            ["PCI\\VEN_10DE&DEV_2504\\4&1A2B", "nv_dispig.inf_amd64_8c2f", "0x0"],
+            level=4,
+        ),
+        _ev(
+            20001,
+            "Microsoft-Windows-UserPnp",
+            _t(now, 40),
+            "Driver Management concluded the process to install driver netwtw10.inf.",
+            ["PCI\\VEN_8086&DEV_06F0\\3&11583659", "netwtw10.inf_amd64_aa11", "0x0"],
+            level=4,
+        ),
+    ]
+    app_installs = [
+        _ev(
+            11707,
+            "MsiInstaller",
+            _t(now, 23.1),
+            "Product: RGB Lighting Control -- Installation completed successfully.",
+            ["Product: RGB Lighting Control -- Installation completed successfully."],
+            level=4,
+        )
+    ]
+    update_history = [
+        {
+            "Title": "2026-10 Cumulative Update for Windows 11 Version 24H2 (KB5044284)",
+            "ResultCode": 4,
+            "HResult": -2145124330,
+            "Date": _t(now, d),
+        }
+        for d in (3, 10, 17)
+    ] + [
+        {
+            "Title": "2026-09 Cumulative Update for Windows 11 Version 24H2 (KB5043178)",
+            "ResultCode": 2,
+            "HResult": 0,
+            "Date": _t(now, 52),
+        }
+    ]
+
     return FakeRunner(
         queries={
             "events.system_crash": system_crash,
             "events.app_crash": app_crash,
             "events.whea": whea,
             "events.storage": storage,
+            "events.driver_installs": driver_installs,
+            "events.app_installs": app_installs,
+            "updates.history": update_history,
             "cim.reliability": {"Index": 3.6, "Time": _t(now, 0)},
             "cim.logical_disks": [
                 {"DeviceID": "C:", "VolumeName": "Windows", "Size": 255e9, "FreeSpace": 11.2e9},

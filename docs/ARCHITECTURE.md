@@ -33,6 +33,9 @@ exception into an `ERROR` result so one broken check never breaks a scan.
   minidump headers merged into incidents and grouped by stop code), graphics
   driver resets (4101), WHEA hardware errors, application crashes (1000) and
   hangs (1002), reliability index.
+- `changes.py`: driver installs (UserPnp 20001/20003), program installs
+  (MsiInstaller 11707/11724) and Windows Update history; lists changes made in the
+  7 days before the first crash, and reports failing updates.
 - `health.py`: free space, physical disk health/wear/temperature, disk errors in
   the event log, devices with errors, uptime/memory/pending restart, last update,
   antivirus state (Security Center, read-only), startup programs.

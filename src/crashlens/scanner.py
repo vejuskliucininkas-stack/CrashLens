@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from crashlens.checks.base import Check, CheckContext
+from crashlens.checks.changes import ChangesCheck
 from crashlens.checks.crashes import (
     AppCrashCheck,
     BlueScreenCheck,
@@ -24,6 +25,7 @@ CRASH_CHECKS: tuple[type[Check], ...] = (
     GraphicsDriverCheck,
     HardwareErrorCheck,
     AppCrashCheck,
+    ChangesCheck,
     ReliabilityCheck,
 )
 HEALTH_CHECKS: tuple[type[Check], ...] = ALL_HEALTH_CHECKS

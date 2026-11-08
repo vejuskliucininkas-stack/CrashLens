@@ -4,7 +4,7 @@ Version 0.1.0. Updated as work lands.
 
 ## How it has been tested
 
-- 115 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
+- 119 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
   fictional Windows data (`FakeRunner`, demo mode).
 - **Not yet run on a real Windows 11 PC.** Two live tests
   (`tests/test_windows_live.py`) and a CI job on `windows-latest` are written to do
@@ -25,6 +25,9 @@ Crash & stability
 - [x] Program crashes and freezes grouped by program + module, with module hints
       and exception-code explanations
 - [x] Reliability index
+- [x] Changes in the 7 days before the first crash (driver installs/removals,
+      Windows updates, program installs/removals)
+- [x] Failing Windows updates with error codes
 
 System health
 - [x] Free disk space per drive

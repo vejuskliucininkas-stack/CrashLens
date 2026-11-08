@@ -20,6 +20,9 @@ after you approve each one, and scanning never changes anything.
 - Graphics driver resets, hardware (WHEA) errors
 - Program crashes and freezes, grouped by program and faulting module, with hints
   ("the crash was inside the NVIDIA graphics driver")
+- **What changed just before the crashes started**: driver installs, Windows
+  updates and program installs in the 7 days before the first crash
+- Windows updates that keep failing, with their error codes
 - Windows' own reliability index
 
 **System health scan**
@@ -95,7 +98,7 @@ This creates `dist\CrashLens\CrashLens.exe` (desktop app) and
 
 ```
 pip install -e ".[dev]"
-pytest                    # 115 tests; GUI tests run headless
+pytest                    # 119 tests; GUI tests run headless
 ruff check src tests      # lint
 python scripts/secret_scan.py
 ```
