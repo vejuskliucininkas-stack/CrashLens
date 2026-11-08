@@ -58,6 +58,29 @@ def system_info() -> SystemInfo:
     )
 
 
+def relaunch_as_admin() -> bool:
+    """Start a new elevated copy of CrashLens through Windows' UAC prompt.
+
+    Returns True if Windows accepted the request (the user still decides in the
+    UAC dialog). Only CrashLens itself is relaunched, with its original arguments.
+    """
+    if not is_windows():
+        return False
+    try:
+        import ctypes
+        import subprocess
+
+        if getattr(sys, "frozen", False):
+            exe, args = sys.executable, sys.argv[1:]
+        else:
+            exe, args = sys.executable, ["-m", "crashlens", *sys.argv[1:]]
+        params = subprocess.list2cmdline(args)
+        rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)  # type: ignore[attr-defined]
+        return int(rc) > 32
+    except Exception:
+        return False
+
+
 def app_data_dir() -> Path:
     """Per-user folder for CrashLens' own files (audit log, settings)."""
     base = os.environ.get("LOCALAPPDATA")
