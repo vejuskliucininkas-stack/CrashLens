@@ -38,3 +38,4 @@ review/packets/*
 Thumbs.db
 .DS_Store
 setup-log.txt
+.setup-temp/

@@ -11,6 +11,7 @@ set "VPY=%VENV%\Scripts\python.exe"
 set "VPYW=%VENV%\Scripts\pythonw.exe"
 set "READY=%VENV%\crashlens-ready.txt"
 set "LOG=%~dp0setup-log.txt"
+set "SETUPTEMP=%~dp0.setup-temp"
 
 if exist "%READY%" goto launch
 
@@ -27,6 +28,14 @@ echo.
 echo CrashLens setup log > "%LOG%"
 %PY% --version >> "%LOG%" 2>&1
 
+rem  Keep all setup files next to CrashLens instead of on drive C: (which may be full).
+rem  These settings only apply inside this window.
+if not exist "%SETUPTEMP%" mkdir "%SETUPTEMP%"
+set "TEMP=%SETUPTEMP%"
+set "TMP=%SETUPTEMP%"
+set "PIP_NO_CACHE_DIR=1"
+set "PIPFLAGS=--disable-pip-version-check --no-cache-dir"
+
 rem  Remove an unfinished setup from an earlier attempt. This folder belongs to CrashLens.
 if exist "%VENV%" rmdir /s /q "%VENV%"
 
@@ -34,7 +43,7 @@ rem ---------------------------------------------------------------- method 1
 echo [method 1] >> "%LOG%"
 %PY% -m venv "%VENV%" >> "%LOG%" 2>&1
 if errorlevel 1 goto method2
-"%VPY%" -m pip install --disable-pip-version-check -e ".[gui]" >> "%LOG%" 2>&1
+"%VPY%" -m pip install %PIPFLAGS% -e ".[gui]" >> "%LOG%" 2>&1
 if errorlevel 1 goto method2
 goto verify
 
@@ -47,7 +56,7 @@ if exist "%VENV%" rmdir /s /q "%VENV%"
 if errorlevel 1 goto fail
 %PY% -m pip --version >> "%LOG%" 2>&1
 if errorlevel 1 goto nopip
-%PY% -m pip install --disable-pip-version-check --target "%VENV%\Lib\site-packages" ".[gui]" >> "%LOG%" 2>&1
+%PY% -m pip install %PIPFLAGS% --target "%VENV%\Lib\site-packages" ".[gui]" >> "%LOG%" 2>&1
 if errorlevel 1 goto fail
 
 rem ---------------------------------------------------------------- check and start
@@ -55,6 +64,7 @@ rem ---------------------------------------------------------------- check and s
 "%VPY%" -c "import crashlens.gui.app" >> "%LOG%" 2>&1
 if errorlevel 1 goto fail
 echo ready> "%READY%"
+if exist "%SETUPTEMP%" rmdir /s /q "%SETUPTEMP%"
 echo  Done.
 
 :launch
@@ -62,6 +72,16 @@ start "" "%VPYW%" -m crashlens %*
 exit /b 0
 
 rem ---------------------------------------------------------------- problems
+:nospace
+echo  A drive is full - there is not enough free space to finish the setup.
+echo  This is usually drive C:. Free up at least 2 GB there, for example with
+echo  Settings - System - Storage - Temporary files, or by emptying the Recycle Bin.
+echo  Then double-click CrashLens.bat again.
+echo.
+echo  Full details are saved in setup-log.txt.
+pause
+exit /b 1
+
 :nopython
 echo.
 echo  CrashLens needs Python, which is not installed on this PC yet.
@@ -94,7 +114,10 @@ pause
 exit /b 1
 
 :fail
+if exist "%SETUPTEMP%" rmdir /s /q "%SETUPTEMP%"
 echo.
+findstr /c:"No space left" "%LOG%" >nul 2>nul
+if not errorlevel 1 goto nospace
 echo  Setup did not finish. The details are below and saved in setup-log.txt.
 echo  Please send a screenshot of this window or the setup-log.txt file.
 echo  ------------------------------------------------------------------------
