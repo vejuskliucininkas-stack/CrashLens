@@ -1,0 +1,32 @@
+name: Build CrashLens.exe
+
+# Builds a ready-to-run Windows app on every push to main.
+# Download it from the run's "Artifacts" section: CrashLens-windows.zip
+# Unzip it and double-click CrashLens.exe - no Python needed.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ".[gui,build]"
+      - run: python packaging/build.py
+      - name: Smoke test the CLI exe
+        run: dist\crashlens-cli\crashlens-cli.exe --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CrashLens-windows
+          path: |
+            dist/CrashLens/
+          retention-days: 30

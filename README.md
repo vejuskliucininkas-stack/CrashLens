@@ -49,28 +49,31 @@ after you approve each one, and scanning never changes anything.
 - Personal details (user name, computer name, e-mails, serial numbers, profile paths)
   are removed by default
 
-## Install and run on Windows 11
+## Start it on Windows 11
 
-1. Install **Python 3.12** from [python.org](https://www.python.org/downloads/windows/)
-   (tick "Add python.exe to PATH" during setup).
-2. Download CrashLens: on GitHub use **Code > Download ZIP** and unzip it, or
-   `git clone` the repository.
-3. Open **Terminal** in the CrashLens folder and run:
-   ```
-   py -m venv .venv
-   .venv\Scripts\activate
-   pip install -e ".[gui]"
-   ```
-4. Start the app:
-   ```
-   crashlens
-   ```
-   Tip: right-click Terminal > **Run as administrator** before step 4 to let CrashLens
-   read crash dump files and disk wear. Everything else works without it.
+1. Download the project as a ZIP (on GitHub: green **Code** button > **Download ZIP**)
+   and unzip it, for example into your Documents folder.
+2. Double-click **CrashLens.bat**.
 
-Try it with sample data first (nothing is read from or changed on your PC):
+That's it. The first start sets everything up by itself (1-3 minutes, needs
+internet). If Python isn't installed yet, it offers to install it for you; after
+that, double-click CrashLens.bat again. Every later start opens the app right away.
+
+Tip: right-click CrashLens.bat > **Run as administrator** to let CrashLens read crash
+dump files and disk wear. Everything else works without it.
+
+When the GitHub build is active, a ready-made **CrashLens.exe** (no Python needed) is
+available from the repository's **Actions** tab > latest "Build CrashLens.exe" run >
+**Artifacts**.
+
+### Manual setup (optional)
+
 ```
-crashlens --demo
+py -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[gui]"
+crashlens            # the app
+crashlens --demo     # the app with sample data
 ```
 
 ### Command line
