@@ -1,7 +1,7 @@
 name: Build CrashLens.exe
 
-# Builds a single-file Windows app on every push to main.
-# Download it from the run's "Artifacts" section and double-click CrashLens.exe.
+# Builds a single-file Windows app on every push to main and publishes it on the
+# repository's Releases page ("latest" release) as a plain CrashLens.exe download.
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write  # needed to publish the release
 
 jobs:
   build:
@@ -39,3 +39,20 @@ jobs:
             dist/CrashLens.exe
             dist/crashlens-cli.exe
           retention-days: 30
+      - name: Publish CrashLens.exe on the Releases page
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $sha = "${{ github.sha }}".Substring(0, 7)
+          $notes = "Download **CrashLens.exe** below and double-click it. No installing needed.`n`nBuilt from $sha. Windows may show a blue 'Windows protected your PC' box the first time: click **More info**, then **Run anyway**."
+          gh release view latest *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create latest dist/CrashLens.exe dist/crashlens-cli.exe --title "CrashLens (latest)" --notes $notes --latest
+          } else {
+            gh release upload latest dist/CrashLens.exe dist/crashlens-cli.exe --clobber
+            gh release edit latest --notes $notes
+          }
+          git push origin "+HEAD:refs/tags/latest" 2>$null
+          exit 0
+
