@@ -59,20 +59,18 @@ after you approve each one, and scanning never changes anything.
 
 ## Start it on Windows 11
 
-1. Download the project as a ZIP (on GitHub: green **Code** button > **Download ZIP**)
-   and unzip it, for example into your Documents folder.
-2. Double-click **CrashLens.bat**.
+1. Download **CrashLens.exe** from the
+   [Releases page](https://github.com/vejuskliucininkas-stack/CrashLens/releases/latest).
+2. Double-click it. That's all - nothing to install.
 
-That's it. The first start sets everything up by itself (1-3 minutes, needs
-internet). If Python isn't installed yet, it offers to install it for you; after
-that, double-click CrashLens.bat again. Every later start opens the app right away.
+The first time, Windows may show a blue box "Windows protected your PC" (the app
+is not code-signed yet): click **More info**, then **Run anyway**.
 
-Tip: right-click CrashLens.bat > **Run as administrator** to let CrashLens read crash
-dump files and disk wear. Everything else works without it.
+A new CrashLens.exe is built, self-tested on Windows and published automatically
+every time the code changes.
 
-When the GitHub build is active, a ready-made **CrashLens.exe** (no Python needed) is
-available from the repository's **Actions** tab > latest "Build CrashLens.exe" run >
-**Artifacts**.
+Without the .exe, you can also download the source and double-click
+**CrashLens.bat**, which sets everything up by itself.
 
 ### Manual setup (optional)
 
