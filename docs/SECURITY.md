@@ -10,7 +10,7 @@ possible, by an automated test.
 | No shell injection | `SubprocessRunner` always passes an argument list with `shell=False`; PowerShell scripts are constants | `test_subprocess_runner_does_not_interpret_shell_metacharacters` |
 | Every command has a timeout | `CommandRunner.run(timeout=...)`; queries 60-90 s, repairs per catalog | `test_subprocess_runner_real_process_and_timeout` |
 | No repair without approval | `RepairExecutor.execute()` consumes a single-use, repair-specific, expiring approval | `test_repair_without_approval_is_refused`, `test_approval_is_single_use_and_specific`, `test_forged_and_expired_approvals_rejected` |
-| GUI approval is explicit | Run button disabled until "I understand" is ticked; Cancel is the default button | `test_approval_dialog_requires_tick`, `test_rejected_dialog_runs_nothing` |
+| GUI approval is explicit | Every fix opens a plain-language "Before we start" window; nothing runs unless "Yes, start" is clicked, and "No, go back" is the default button (Enter / Esc never start a fix) | `test_confirm_dialog_defaults_to_no`, `test_saying_no_runs_nothing` |
 | CLI approval is explicit | User must type exactly `RUN`; anything else (including `yes`) cancels | `test_repair_cancelled_without_exact_word` |
 | No destructive repairs | The catalog contains no delete/format/cleanup/registry/security-setting commands; `chkdsk` only with `/scan` | `test_catalog_commands_are_safe` |
 | Never disable Windows security | No catalog entry touches security settings; antivirus check is read-only and only opens Windows Security | `test_catalog_commands_are_safe` |

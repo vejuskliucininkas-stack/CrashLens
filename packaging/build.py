@@ -14,7 +14,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 BUILDS = [
-    ["--windowed", "--name", "CrashLens", "packaging/gui_entry.py"],
+    [
+        "--windowed",
+        "--name",
+        "CrashLens",
+        "--icon",
+        "packaging/crashlens.ico",
+        "packaging/gui_entry.py",
+    ],
     [
         "--console",
         "--name",

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from crashlens import APP_NAME
+from crashlens.core.settings import Settings
 from crashlens.environment import build_environment
+from crashlens.gui import logo
+from crashlens.gui import style as theme
 from crashlens.gui.main_window import MainWindow
-from crashlens.gui.style import QSS
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,10 +25,12 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication.instance() or QApplication([sys.argv[0]])
     app.setApplicationName(APP_NAME)
-    app.setStyle("Fusion")
-    app.setStyleSheet(QSS)
+    app.setWindowIcon(logo.icon())
     try:
-        window = MainWindow(build_environment(demo=args.demo, dry_run=args.dry_run))
+        env = build_environment(demo=args.demo, dry_run=args.dry_run)
+        settings = Settings.load(env.settings_path)
+        theme.apply(app, settings)
+        window = MainWindow(env, settings)
     except Exception as exc:  # show the problem instead of closing silently
         QMessageBox.critical(
             None,
@@ -34,6 +39,11 @@ def main(argv: list[str] | None = None) -> int:
             "Please send a screenshot of this message.",
         )
         return 1
+    # Follow Windows when it switches between light and dark (Qt 6.5+).
+    with contextlib.suppress(AttributeError):
+        app.styleHints().colorSchemeChanged.connect(
+            lambda *_: window.apply_look() if window.settings.theme == "system" else None
+        )
     window.show()
     return app.exec()
 

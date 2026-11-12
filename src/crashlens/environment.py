@@ -20,13 +20,17 @@ class Environment:
     demo: bool
     executor: RepairExecutor
     audit: AuditLog
+    settings_path: Path | None = None
 
     def scanner(self, lookback_days: int = 30) -> Scanner:
         return Scanner(self.runner, self.system, demo=self.demo, lookback_days=lookback_days)
 
 
 def build_environment(
-    demo: bool = False, dry_run: bool = False, audit_path: Path | None = None
+    demo: bool = False,
+    dry_run: bool = False,
+    audit_path: Path | None = None,
+    settings_path: Path | None = None,
 ) -> Environment:
     if demo:
         runner: CommandRunner = demo_runner()
@@ -44,4 +48,6 @@ def build_environment(
         is_admin=system.is_admin,
         dry_run=dry_run,
     )
-    return Environment(runner, system, demo, executor, audit)
+    if settings_path is None:
+        settings_path = app_data_dir() / "settings.json"
+    return Environment(runner, system, demo, executor, audit, settings_path)

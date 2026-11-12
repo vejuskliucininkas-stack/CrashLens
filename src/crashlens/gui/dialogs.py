@@ -1,81 +1,202 @@
-"""The approval dialog shown before any repair runs."""
+"""Dialogs: asking before a fix runs, and explaining a problem in plain words."""
 
 from __future__ import annotations
 
 import html
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QDialog,
-    QDialogButtonBox,
+    QFrame,
+    QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
+from crashlens.core.models import Finding
+from crashlens.gui import friendly
+from crashlens.gui import style as theme
 from crashlens.repairs.catalog import Repair, RepairKind
 
 
-class ApprovalDialog(QDialog):
-    """Shows exactly what a repair will do. Run stays disabled until the box is ticked."""
+def label(text: str, name: str | None = None, wrap: bool = True) -> QLabel:
+    lab = QLabel(text)
+    if name:
+        lab.setObjectName(name)
+    lab.setWordWrap(wrap)
+    lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    return lab
+
+
+def button(text: str, name: str | None = None) -> QPushButton:
+    btn = QPushButton(text)
+    if name:
+        btn.setObjectName(name)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    return btn
+
+
+class Expander(QWidget):
+    """A 'Show technical details' link that reveals extra content."""
+
+    def __init__(self, title: str, content: QWidget, parent=None) -> None:
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self._title = title
+        self.toggle = button(f"▸  Show {title}", "Link")
+        self.content = content
+        content.setVisible(False)
+        self.toggle.clicked.connect(self._flip)
+        lay.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(content)
+
+    def _flip(self) -> None:
+        show = not self.content.isVisible()
+        self.content.setVisible(show)
+        arrow, verb = ("▾", "Hide") if show else ("▸", "Show")
+        self.toggle.setText(f"{arrow}  {verb} {self._title}")
+
+
+class ConfirmRepairDialog(QDialog):
+    """Asks, in plain words, before any fix runs. 'No' is the default button."""
 
     def __init__(self, repair: Repair, will_elevate: bool, dry_run: bool, parent=None) -> None:
         super().__init__(parent)
         self.repair = repair
-        self.setWindowTitle("Approve repair")
-        self.setMinimumWidth(520)
+        self.setWindowTitle("Before we start")
+        self.setMinimumWidth(560)
         lay = QVBoxLayout(self)
-        lay.setSpacing(10)
+        lay.setContentsMargins(28, 24, 28, 22)
+        lay.setSpacing(12)
 
-        title = QLabel(f"<b style='font-size:13pt'>{html.escape(repair.title)}</b>")
-        title.setWordWrap(True)
-        lay.addWidget(title)
+        lay.addWidget(label(friendly.repair_name(repair.id), "H2"))
+        lay.addWidget(label(friendly.repair_text(repair.id) or repair.description))
 
-        rows = [
-            ("What happens", repair.what_happens),
-            ("Command", " ".join(repair.argv)),
-            ("Takes", repair.duration),
-        ]
-        if repair.kind is RepairKind.TOOL and repair.changes_system:
-            rows.append(("Changes", "Windows system files or settings (not your personal files)."))
+        facts = [f"<b>How long:</b> {html.escape(repair.duration)}"]
         if will_elevate:
-            rows.append(("Permission", "Windows will ask for administrator permission next."))
+            facts.append(
+                "<b>Windows will ask for permission.</b> When you see "
+                "“Do you want to allow this app to make changes?”, click "
+                "<b>Yes</b>."
+            )
         if repair.needs_restart:
-            rows.append(("Restart", "A restart is needed to finish."))
+            facts.append("<b>Restart needed.</b> Save your work first.")
         if repair.caution:
-            rows.append(("Caution", repair.caution))
+            facts.append(f"<b>Please note:</b> {html.escape(repair.caution)}")
         if dry_run:
-            rows.append(("Demo / dry run", "Nothing will actually run."))
-        body = "".join(
-            f"<tr><td style='padding:3px 12px 3px 0;color:#5f5f5f;white-space:nowrap'>"
-            f"{html.escape(k)}</td><td style='padding:3px 0'>"
-            + (f"<code>{html.escape(v)}</code>" if k == "Command" else html.escape(v))
-            + "</td></tr>"
-            for k, v in rows
+            facts.append("<b>Demo:</b> this is practice - nothing will really happen.")
+        info = label("<br>".join(facts))
+        info.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(info)
+
+        tech = label(
+            f"What CrashLens will run: <code>{html.escape(' '.join(repair.argv))}</code><br>"
+            f"{html.escape(repair.what_happens)}",
+            "Small",
         )
-        details = QLabel(f"<table>{body}</table>")
-        details.setWordWrap(True)
-        details.setTextFormat(Qt.TextFormat.RichText)
-        lay.addWidget(details)
+        tech.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(Expander("technical details", tech))
 
-        self.confirm = QCheckBox("I understand what this does and want to run it now.")
-        lay.addWidget(self.confirm)
+        lay.addSpacing(6)
+        lay.addWidget(label("Do you want to start?", "H3"))
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.no_button = button("No, go back")
+        start_word = "Yes, start" if repair.kind is RepairKind.TOOL else "Yes, open it"
+        self.yes_button = button(start_word, "Primary")
+        self.no_button.setDefault(True)
+        self.no_button.setAutoDefault(True)
+        self.yes_button.setAutoDefault(False)
+        self.no_button.clicked.connect(self.reject)
+        self.yes_button.clicked.connect(self.accept)
+        row.addWidget(self.no_button)
+        row.addWidget(self.yes_button)
+        lay.addLayout(row)
+        self.no_button.setFocus()
 
-        buttons = QDialogButtonBox()
-        self.run_button = QPushButton("Run repair" if repair.kind is RepairKind.TOOL else "Open")
-        self.run_button.setObjectName("Primary")
-        self.run_button.setEnabled(False)
-        cancel = buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
-        buttons.addButton(self.run_button, QDialogButtonBox.ButtonRole.AcceptRole)
-        cancel.setDefault(True)
-        cancel.setAutoDefault(True)
-        self.run_button.setAutoDefault(False)
-        self.confirm.toggled.connect(self.run_button.setEnabled)
-        buttons.accepted.connect(self._accept_if_confirmed)
-        buttons.rejected.connect(self.reject)
-        lay.addWidget(buttons)
 
-    def _accept_if_confirmed(self) -> None:
-        if self.confirm.isChecked():
-            self.accept()
+class FindingDialog(QDialog):
+    """'Tell me more': what happened, what to do, and the fixes - in plain words."""
+
+    fix_requested = Signal(str)
+
+    def __init__(self, finding: Finding, show_details: bool, parent=None) -> None:
+        super().__init__(parent)
+        self.finding = finding
+        self.setWindowTitle("What this means")
+        self.resize(640, 620)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        body.setObjectName("Page")
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(28, 24, 28, 16)
+        lay.setSpacing(12)
+
+        badge = label(friendly.badge(finding).upper(), "Badge")
+        badge.setStyleSheet(f"color:{theme.severity_color(finding.severity)}")
+        lay.addWidget(badge)
+        lay.addWidget(label(friendly.headline(finding), "H2"))
+        lay.addWidget(label(friendly.explanation(finding)))
+
+        lay.addWidget(label("What happened", "H3"))
+        lay.addWidget(label(finding.summary, "Muted"))
+
+        if finding.recommendations:
+            lay.addWidget(label("What you can do", "H3"))
+            steps = "".join(f"<li>{html.escape(r)}</li>" for r in finding.recommendations)
+            s = label(f"<ol style='margin-left:-20px'>{steps}</ol>")
+            s.setTextFormat(Qt.TextFormat.RichText)
+            lay.addWidget(s)
+
+        self.fix_buttons: list[QPushButton] = []
+        if finding.repair_ids:
+            lay.addWidget(label("CrashLens can help with", "H3"))
+            for i, rid in enumerate(finding.repair_ids):
+                card = QFrame()
+                card.setObjectName("Card")
+                cl = QHBoxLayout(card)
+                cl.setContentsMargins(16, 12, 12, 12)
+                text = QVBoxLayout()
+                text.addWidget(label(f"<b>{html.escape(friendly.repair_name(rid))}</b>"))
+                text.addWidget(label(friendly.repair_text(rid), "Small"))
+                cl.addLayout(text, 1)
+                btn = button("Start", "Primary" if i == 0 else None)
+                btn.clicked.connect(lambda _=False, r=rid: self._fix(r))
+                self.fix_buttons.append(btn)
+                cl.addWidget(btn, 0, Qt.AlignmentFlag.AlignVCenter)
+                lay.addWidget(card)
+
+        if finding.details or finding.evidence:
+            parts = []
+            if finding.details:
+                parts.append(html.escape(finding.details))
+            parts.append(f"<b>{html.escape(finding.title)}</b>")
+            parts += [html.escape(e) for e in finding.evidence]
+            tech = label("<br>".join(parts), "Small")
+            tech.setTextFormat(Qt.TextFormat.RichText)
+            exp = Expander("technical details", tech)
+            if show_details:
+                exp._flip()
+            lay.addWidget(exp)
+        lay.addStretch(1)
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(28, 8, 28, 18)
+        row.addStretch(1)
+        close = button("Close")
+        close.clicked.connect(self.reject)
+        row.addWidget(close)
+        outer.addLayout(row)
+
+    def _fix(self, rid: str) -> None:
+        self.done(QDialog.DialogCode.Accepted)
+        self.fix_requested.emit(rid)

@@ -44,6 +44,14 @@ after you approve each one, and scanning never changes anything.
   every repair is recorded in a history log.
 - No repair deletes files, changes security settings or turns off protection.
 
+**Made for everyone**
+- One big "Check my computer" button; results in plain words ("Your computer crashed
+  with a blue screen 3 times") with a "Fix it" button and "Tell me more"
+- Only the problems that matter are shown first; small things are folded away
+- Welcome screen on first start
+- Settings: light / dark / same as Windows, three text sizes, how far back to look
+- Technical details and an expert Details page are one switch away
+
 **Reports to share**
 - Save as a web page (HTML), Markdown (for forums) or JSON
 - Personal details (user name, computer name, e-mails, serial numbers, profile paths)
@@ -101,7 +109,7 @@ This creates `dist\CrashLens\CrashLens.exe` (desktop app) and
 
 ```
 pip install -e ".[dev]"
-pytest                    # 119 tests; GUI tests run headless
+pytest                    # 127 tests; GUI tests run headless
 ruff check src tests      # lint
 python scripts/secret_scan.py
 ```

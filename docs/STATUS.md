@@ -4,7 +4,7 @@ Version 0.1.0. Updated as work lands.
 
 ## How it has been tested
 
-- 119 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
+- 127 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
   fictional Windows data (`FakeRunner`, demo mode).
 - **Not yet run on a real Windows 11 PC.** Two live tests
   (`tests/test_windows_live.py`) and a CI job on `windows-latest` are written to do
@@ -54,7 +54,12 @@ Reports
 - [x] Copy summary to clipboard
 
 App
-- [x] Desktop app (PySide6): Overview, Problems (filters), Checks, Repairs, Report
+- [x] Beginner-first design: welcome screen, one-button check, plain-language
+      verdict and problem cards with "Fix it" / "Tell me more", small things folded
+- [x] Settings: light / dark / follow Windows, three text sizes, look-back period,
+      expert mode (saved to %LOCALAPPDATA%\\CrashLens\\settings.json)
+- [x] Logo and app icon
+- [x] Pages: Home, Fix tools, Get help (reports), Settings, Details (experts only)
 - [x] Background scanning with progress and cancel
 - [x] Restart as administrator
 - [x] Command-line interface
