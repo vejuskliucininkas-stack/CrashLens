@@ -4,9 +4,11 @@ Version 0.1.0. Updated as work lands.
 
 ## How it has been tested
 
-- 127 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
+- 147 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
   fictional Windows data (`FakeRunner`, demo mode).
-- **Not yet run on a real Windows 11 PC.** Two live tests
+- The .exe is built, self-tested and run against a real Windows machine (GitHub's
+  Windows Server 2025 runner) on every change. Testing on the owner's own PC has started.
+- **Previously: not yet run on a real Windows 11 PC.** Two live tests
   (`tests/test_windows_live.py`) and a CI job on `windows-latest` are written to do
   that, but have not been executed yet.
 - **Not yet reviewed by ChatGPT.** The review system is ready (`review/`); no
@@ -59,6 +61,15 @@ App
 - [x] Settings: light / dark / follow Windows, three text sizes, look-back period,
       expert mode (saved to %LOCALAPPDATA%\\CrashLens\\settings.json)
 - [x] Logo and app icon
+- [x] Dashboard: health score (0-100), tiles for Windows, memory, uptime, every drive,
+      stability, last update, virus protection, startup programs
+- [x] Old problems (not seen for 7 days) folded into "Not happened recently";
+      "It's fixed" hides a problem until it happens again; after a fix CrashLens
+      re-checks and lists what was fixed
+- [x] Real fixes: clean temporary files, check for updates now, reset Windows Update,
+      re-detect devices, update virus protection, quick virus scan
+- [x] Admin fixes run hidden after the Windows permission prompt; their result is read
+      back and explained in the app
 - [x] Pages: Home, Fix tools, Get help (reports), Settings, Details (experts only)
 - [x] Background scanning with progress and cancel
 - [x] Restart as administrator

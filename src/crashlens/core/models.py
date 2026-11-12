@@ -123,6 +123,7 @@ class ScanReport:
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
     demo: bool = False
+    metrics: dict[str, Any] = field(default_factory=dict)
 
     @property
     def findings(self) -> list[Finding]:
@@ -151,5 +152,6 @@ class ScanReport:
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "system": self.system.to_dict(),
             "summary": {s.name: n for s, n in self.counts().items()},
+            "metrics": self.metrics,
             "results": [r.to_dict() for r in self.results],
         }

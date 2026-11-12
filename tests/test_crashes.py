@@ -172,7 +172,8 @@ def test_app_crashes_grouped_with_hints(ctx, fake):
 def test_reliability_index(ctx, fake):
     fake.queries["cim.reliability"] = {"Index": 4.2, "Time": "2026-11-08T00:00:00Z"}
     [f] = ReliabilityCheck().run(ctx).findings
-    assert f.severity == Severity.MEDIUM and "4.2" in f.title
+    assert f.severity == Severity.INFO and "4.2" in f.title
+    assert ctx.metrics["reliability"] == 4.2
     fake.queries["cim.reliability"] = []
     assert ReliabilityCheck().run(ctx).status == CheckStatus.UNAVAILABLE
 

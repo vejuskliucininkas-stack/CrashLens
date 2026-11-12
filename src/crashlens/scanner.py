@@ -86,6 +86,7 @@ class Scanner:
             if progress:
                 progress(i, total, check.name)
             report.results.append(check.run(ctx))
+        report.metrics = dict(ctx.metrics)
         if progress:
             progress(total, total, "Done")
         report.finished_at = datetime.now(timezone.utc)

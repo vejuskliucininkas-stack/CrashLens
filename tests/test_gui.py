@@ -53,28 +53,60 @@ def test_first_start_shows_welcome_then_home(qtbot, env):
 def test_starts_on_home_without_report(window):
     assert window.stack.currentIndex() == P_HOME
     assert window.report is None
-    assert window.scan_btn.text() == "Check my computer"
+    assert window.scan_btn.text() == "Scan now"
     assert not window.save_btn.isEnabled()
     assert window.windowTitle().endswith("demo")
     # Details page hidden for normal users
     assert window.nav.item(4).isHidden()
 
 
-def test_scan_shows_plain_verdict_and_cards(qtbot, window):
+def test_scan_shows_dashboard_verdict_and_cards(qtbot, window):
     report = scan(qtbot, window)
     assert window.report is report
-    assert window.verdict_card.isVisible()
-    assert "problems to fix" in window.verdict_title.text()
+    assert window.ring.score is not None and 0 <= window.ring.score < 85
+    assert "need attention" in window.verdict_title.text()
+    assert window.tiles_grid.count() >= 6  # Windows, memory, drives, updates...
     assert window.cards, "problem cards were not created"
     first = window.cards[0]
     texts = " ".join(lab.text() for lab in first.findChildren(QLabel))
-    assert "blue screen" in texts and "START HERE" in texts
-    assert window.small_toggle is not None and not window.small_holder.isVisible()
-    window.small_toggle.click()
-    assert window.small_holder.isVisibleTo(window)
-    assert window.scan_btn.text() == "Check again" and window.scan_btn.isEnabled()
+    assert "blue screen" in texts and "START HERE" in texts and "Last time" in texts
+    # minor issues and old problems are folded away
+    assert window.minor_toggle is not None and not window.minor_holder.isVisible()
+    assert window.old_toggle is not None and not window.old_holder.isVisible()
+    window.old_toggle.click()
+    assert window.old_holder.isVisibleTo(window)
+    assert window.scan_btn.text() == "Scan again" and window.scan_btn.isEnabled()
     assert window.save_btn.isEnabled()
     assert all(r.status != CheckStatus.ERROR for r in report.results)
+
+
+def test_mark_fixed_hides_until_it_happens_again(qtbot, window, env):
+    scan(qtbot, window)
+    fid = window.cards[0].property("finding_id")
+    assert fid.startswith("bsod-")
+    window.mark_fixed(fid)
+    assert fid in Settings.load(env.settings_path).resolved
+    active_ids = [
+        c.property("finding_id") for c in window.cards if c.parent() is not window.fixed_holder
+    ]
+    assert fid not in active_ids
+    assert window.fixed_toggle is not None
+    window.unmark_fixed(fid)
+    assert window.cards[0].property("finding_id") == fid
+
+
+def test_fix_from_card_marks_fixed_and_rechecks(qtbot, window, monkeypatch):
+    monkeypatch.setattr(
+        ConfirmRepairDialog, "exec", lambda self: ConfirmRepairDialog.DialogCode.Accepted
+    )
+    scan(qtbot, window)
+    f = next(f for f in window.report.findings if f.id == "gpu-tdr")
+    with qtbot.waitSignal(window.scan_completed, timeout=10000):
+        window.request_repair(f.repair_ids[0], f.id)
+    assert "gpu-tdr" in window.settings.resolved
+    assert window.fixed_banner.isVisibleTo(window)
+    banner = window.fixed_banner.findChild(QLabel).text()
+    assert "fixed" in banner and "screen" in banner
 
 
 def test_theme_switch_applies_and_saves(window, env):

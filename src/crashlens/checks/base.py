@@ -26,6 +26,7 @@ class CheckContext:
     lookback_days: int = 30
     minidump_dir: Path | None = None
     demo: bool = False
+    metrics: dict[str, Any] = field(default_factory=dict)  # facts for the dashboard
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def cached(self, key: str, producer: Callable[[], Any]) -> Any:

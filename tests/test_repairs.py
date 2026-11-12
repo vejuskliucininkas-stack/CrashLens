@@ -1,5 +1,7 @@
 import json
+import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -128,13 +130,33 @@ def test_runs_tool_and_interprets_sfc_output(tmp_path):
     assert len(log[0]["approval"]) == 8  # only a prefix of the token is logged
 
 
-def test_non_admin_uses_uac_window(tmp_path):
-    runner = FakeRunner(commands={"powershell.exe": CommandResult(("p",), 0, "")})
-    ex = make_executor(runner, admin=False, tmp_path=tmp_path)
+def test_non_admin_runs_hidden_with_uac_and_reads_result(tmp_path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    def elevated(argv):
+        # The hidden elevated process writes sfc's output (UTF-16) to CrashLens' log file.
+        log = re.search(r'> "([^"]+)"', argv[-1]).group(1)
+        Path(log).write_bytes(
+            "Windows Resource Protection did not find any integrity violations.".encode("utf-16-le")
+        )
+        return CommandResult(argv, 0, "")
+
+    runner = FakeRunner(commands={"powershell.exe": elevated})
+    ex = RepairExecutor(
+        runner,
+        ApprovalRegistry(),
+        AuditLog(None),
+        is_windows=True,
+        is_admin=False,
+        output_dir=out_dir,
+    )
     res = ex.execute("sfc_scan", ex.approvals.grant("sfc_scan", "gui"))
-    assert res.status == "launched" and res.elevated_window
+    assert res.status == "success" and "No damaged" in res.message
     script = runner.calls[0][-1]
-    assert "-Verb RunAs" in script and "'/k sfc.exe /scannow'" in script
+    assert "-Verb RunAs" in script and "-WindowStyle Hidden" in script and "-Wait" in script
+    assert "sfc.exe /scannow >" in script
+    assert list(out_dir.iterdir()) == []  # CrashLens removed its own output file
 
 
 def test_uac_declined_is_cancelled(tmp_path):
@@ -195,7 +217,13 @@ def test_elevated_argv_rejects_quotes():
 
     bad = replace(REPAIRS["sfc_scan"], argv=("sfc.exe", "x'; Remove-Item C:\\ '"))
     with pytest.raises(ValueError):
-        elevated_argv(bad)
+        elevated_argv(bad, Path(r"C:\ProgramData\CrashLens\x.txt"))
+    with pytest.raises(ValueError):
+        elevated_argv(REPAIRS["sfc_scan"], Path("/x/O'Brien/x.txt"))
+    with pytest.raises(ValueError):
+        elevated_argv(REPAIRS["sfc_scan"], Path("/x/a & del/x.txt"))
+    with pytest.raises(ValueError):
+        elevated_argv(REPAIRS["sfc_scan"], Path("relative.txt"))
 
 
 @pytest.mark.parametrize(
@@ -234,3 +262,95 @@ def test_audit_log_read_skips_garbage(tmp_path):
     log.write("y")
     assert [e["event"] for e in log.read()] == ["x", "y"]
     assert AuditLog(None).read() == []
+
+
+# --------------------------------------------------------------------------- cleanup
+
+
+def _old(path, days=5):
+    import os
+    import time
+
+    t = time.time() - days * 86400
+    os.utime(path, (t, t))
+
+
+def test_clean_temp_only_old_files_inside_temp(tmp_path):
+    from crashlens.repairs.cleanup import clean_temp
+
+    temp = tmp_path / "Temp"
+    (temp / "sub").mkdir(parents=True)
+    old_file = temp / "old.tmp"
+    old_file.write_bytes(b"x" * 2048)
+    _old(old_file)
+    new_file = temp / "new.tmp"
+    new_file.write_text("in use")
+    nested_old = temp / "sub" / "a.log"
+    nested_old.write_text("old")
+    _old(nested_old)
+    _old(temp / "sub")
+    # a precious file outside, reachable only through a link inside Temp
+    precious = tmp_path / "Documents" / "thesis.docx"
+    precious.parent.mkdir()
+    precious.write_text("keep me")
+    _old(precious)
+    (temp / "link-to-docs").symlink_to(precious.parent, target_is_directory=True)
+
+    res = clean_temp([temp])
+    assert not old_file.exists() and not nested_old.exists()
+    assert not (temp / "sub").exists()  # emptied old folder removed
+    assert new_file.exists()  # recent file kept
+    assert precious.exists()  # link not followed
+    assert res.files_deleted == 2 and res.bytes_freed >= 2048
+
+
+def test_clean_temp_refuses_non_temp_folders(tmp_path):
+    import pytest as _pytest
+
+    from crashlens.repairs.cleanup import UnsafeFolderError, clean_temp
+
+    docs = tmp_path / "Documents"
+    docs.mkdir()
+    (docs / "a.txt").write_text("x")
+    with _pytest.raises(UnsafeFolderError):
+        clean_temp([docs])
+    assert (docs / "a.txt").exists()
+    with _pytest.raises(UnsafeFolderError):
+        clean_temp([Path("/")])
+
+
+def test_clean_temp_repair_through_executor(tmp_path):
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    f = temp / "junk.tmp"
+    f.write_bytes(b"x" * 4096)
+    _old(f)
+    ex = RepairExecutor(
+        FakeRunner(),
+        ApprovalRegistry(),
+        AuditLog(None),
+        is_windows=True,
+        is_admin=False,
+        temp_roots=[temp],
+    )
+    with pytest.raises(ApprovalError):
+        ex.execute("clean_temp", None)
+    assert f.exists()
+    res = ex.execute("clean_temp", ex.approvals.grant("clean_temp", "gui"))
+    assert res.status == "success" and "Freed" in res.message and not f.exists()
+
+
+@pytest.mark.parametrize(
+    "rid,text,status",
+    [
+        ("reset_windows_update", "CrashLens-reset-complete", "success"),
+        ("reset_windows_update", "Access denied", "failed"),
+        ("update_defender", "CrashLens-defender-updated", "success"),
+        ("update_defender", "error", "failed"),
+        ("quick_virus_scan", "CrashLens-scan-complete", "success"),
+        ("windows_update_scan", "", "success"),
+        ("rescan_devices", "Scanning for device hardware changes", "success"),
+    ],
+)
+def test_interpret_new_fixes(rid, text, status):
+    assert interpret(REPAIRS[rid], 0, text).status == status

@@ -15,6 +15,34 @@ from crashlens.core.models import Finding, Severity
 
 # repair id -> (button / title text, what it does in one or two plain sentences)
 REPAIR_WORDS: dict[str, tuple[str, str]] = {
+    "clean_temp": (
+        "Clean up temporary files",
+        "Deletes leftover temporary files that Windows and programs no longer need. "
+        "Your documents, photos, downloads and the Recycle Bin are not touched.",
+    ),
+    "windows_update_scan": (
+        "Check for updates now",
+        "Windows Update looks for new updates and drivers straight away and installs them "
+        "in the background.",
+    ),
+    "reset_windows_update": (
+        "Reset Windows Update",
+        "Fixes updates that keep failing: Windows Update is restarted with a fresh download "
+        "folder. Nothing is deleted.",
+    ),
+    "rescan_devices": (
+        "Re-detect devices",
+        "Windows looks for your hardware again and reinstalls drivers it already has. "
+        "Often brings a device that stopped working back.",
+    ),
+    "update_defender": (
+        "Update virus protection",
+        "Downloads the newest virus definitions for Microsoft Defender.",
+    ),
+    "quick_virus_scan": (
+        "Quick virus scan",
+        "Microsoft Defender checks the places viruses usually hide. Takes 5-15 minutes.",
+    ),
     "sfc_scan": (
         "Repair Windows files",
         "Windows checks its own files and fixes any that are broken. "

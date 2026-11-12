@@ -294,7 +294,7 @@ class GraphicsDriverCheck(Check):
                 "Remove any graphics-card overclock.",
                 "Check graphics-card temperatures and that its power cables are secure.",
             ),
-            repair_ids=("open_device_manager", "open_windows_update"),
+            repair_ids=("windows_update_scan", "open_device_manager"),
             occurrences=n,
             last_seen=latest,
         )
@@ -562,14 +562,10 @@ class ReliabilityCheck(Check):
             index = float(rows[0]["Index"])
         except (TypeError, ValueError) as exc:
             raise Unavailable("Reliability data could not be read.") from exc
-        if index < 3:
-            sev = Severity.HIGH
-        elif index < 5:
-            sev = Severity.MEDIUM
-        elif index < 7:
-            sev = Severity.LOW
-        else:
-            sev = Severity.INFO
+        # Shown on the dashboard; it summarises the crashes already reported, so it is
+        # information only and does not count as a problem of its own.
+        sev = Severity.INFO
+        ctx.metrics["reliability"] = round(index, 1)
         finding = Finding(
             id="reliability-index",
             title=f"Reliability index: {index:.1f} / 10",

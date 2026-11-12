@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
@@ -43,10 +44,12 @@ from crashlens.core.settings import LOOKBACK_CHOICES, Settings
 from crashlens.environment import Environment
 from crashlens.gui import friendly, logo
 from crashlens.gui import style as theme
+from crashlens.gui.dashboard import ScoreRing, Tile, tiles_from_metrics
 from crashlens.gui.dialogs import ConfirmRepairDialog, FindingDialog, button, label
 from crashlens.gui.workers import RepairWorker, ScanWorker
 from crashlens.repairs.catalog import REPAIRS
 from crashlens.report import render, write_report
+from crashlens.triage import Triage, ago, is_event, score_label, triage
 
 P_WELCOME, P_HOME, P_FIX, P_HELP, P_SETTINGS, P_DETAILS = range(6)
 NAV = [
@@ -147,6 +150,8 @@ class MainWindow(QMainWindow):
         self._threads: list[tuple[QThread, object]] = []
         self._scan_worker: ScanWorker | None = None
         self._repair_running = False
+        self._fix_for: str | None = None
+        self._recheck_before: dict[str, str] | None = None
         self._fix_buttons: list[QPushButton] = []
         self.cards: list[QFrame] = []
 
@@ -262,8 +267,7 @@ class MainWindow(QMainWindow):
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(title)
         sub = label(
-            "Find out why your computer crashes, freezes or feels slow - "
-            "explained in plain words, with fixes you can start in one click.",
+            "Finds out why your PC crashes, freezes or slows down - and fixes it.",
             "Muted",
         )
         sub.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -272,9 +276,9 @@ class MainWindow(QMainWindow):
         steps = QHBoxLayout()
         steps.setSpacing(14)
         for num, head, text in (
-            ("1", "Check", "One button looks at your whole computer. It only looks."),
-            ("2", "Understand", "Every problem is explained the way a friend would."),
-            ("3", "Fix", "Fixes ask you first. Nothing changes unless you say yes."),
+            ("1", "Scan", "Reads Windows' own records and system status. Changes nothing."),
+            ("2", "Understand", "Every problem in plain words, most important first."),
+            ("3", "Fix", "Real fixes, one click each. Each one asks you first."),
         ):
             card, cl = _card()
             n = label(num, "H1")
@@ -287,7 +291,7 @@ class MainWindow(QMainWindow):
         lay.addLayout(steps)
 
         lay.addSpacing(6)
-        look = label("How do you like it?", "H3")
+        look = label("Appearance", "H3")
         look.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(look)
         self.welcome_theme = self._choice_row(
@@ -297,7 +301,7 @@ class MainWindow(QMainWindow):
         )
         lay.addWidget(self.welcome_theme[0])
         lay.addSpacing(8)
-        go = button("Let's start", "Big")
+        go = button("Get started", "Big")
         go.clicked.connect(self._finish_welcome)
         self.welcome_button = go
         lay.addWidget(go, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -312,83 +316,101 @@ class MainWindow(QMainWindow):
 
     def _build_home(self) -> QWidget:
         area, lay = _scroll_page()
-        hero, hl = _card("Hero", (36, 32, 36, 30))
-        hl.setSpacing(12)
-        self.hello = label("Let's check your computer", "H1")
-        hl.addWidget(self.hello)
-        self.hello_sub = label(
-            "Press the button. CrashLens looks for problems and explains them in simple "
-            "words. Checking never changes anything.",
-            "Muted",
-        )
-        hl.addWidget(self.hello_sub)
-        row = QHBoxLayout()
-        self.scan_btn = button("Check my computer", "Big")
-        self.scan_btn.clicked.connect(self.start_scan)
-        row.addWidget(self.scan_btn)
+        head = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(4)
+        self.hello = label("PC health", "H1")
+        self.hello_sub = label("Not scanned yet.", "Muted")
+        titles.addWidget(self.hello)
+        titles.addWidget(self.hello_sub)
+        head.addLayout(titles, 1)
         self.cancel_btn = button("Stop")
         self.cancel_btn.clicked.connect(self.cancel_scan)
         self.cancel_btn.setVisible(False)
-        row.addWidget(self.cancel_btn)
-        row.addStretch(1)
-        hl.addLayout(row)
+        head.addWidget(self.cancel_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.scan_btn = button("Scan now", "Big")
+        self.scan_btn.clicked.connect(self.start_scan)
+        head.addWidget(self.scan_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addLayout(head)
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
         self.progress.setVisible(False)
-        hl.addWidget(self.progress)
+        lay.addWidget(self.progress)
         self.progress_text = label("", "Muted")
         self.progress_text.setVisible(False)
-        hl.addWidget(self.progress_text)
-        lay.addWidget(hero)
+        lay.addWidget(self.progress_text)
 
         s = self.env.system
         if self.env.demo:
             lay.addWidget(
                 self._banner(
-                    "<b>Demo mode.</b> You are looking at a pretend computer with made-up "
-                    "problems. Nothing on your real computer is checked or changed."
+                    "<b>Demo mode</b> - this is a sample PC with made-up problems. Nothing on "
+                    "this computer is read or changed."
                 )
             )
         elif not s.is_windows:
             lay.addWidget(
                 self._banner(
-                    "<b>This computer isn't running Windows</b>, so CrashLens can't check it. "
-                    "Start it with --demo to try it with a pretend computer."
+                    "<b>This computer isn't running Windows</b>, so it can't be scanned. "
+                    "Start CrashLens with --demo to see a sample PC."
                 )
             )
         elif not s.is_admin:
             banner = self._banner(
-                "<b>Tip:</b> CrashLens can look a little deeper if you let it run as administrator."
+                "Some details (crash dump files, disk wear) are only visible with "
+                "administrator rights."
             )
-            btn = button("Allow")
+            btn = button("Restart as administrator")
             btn.clicked.connect(self._restart_as_admin)
             banner.layout().addWidget(btn)
             lay.addWidget(banner)
 
-        self.verdict_card, vl = _card("Card", (26, 22, 26, 22))
+        self.fixed_banner = self._banner("")
+        self.fixed_banner.setVisible(False)
+        lay.addWidget(self.fixed_banner)
+
+        self.verdict_card, vl = _card("Hero", (26, 22, 26, 22))
         vrow = QHBoxLayout()
-        vrow.setSpacing(18)
-        self.verdict_icon = QLabel()
-        self.verdict_icon.setFixedSize(64, 64)
-        self.verdict_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        vrow.addWidget(self.verdict_icon, 0, Qt.AlignmentFlag.AlignTop)
+        vrow.setSpacing(26)
+        self.ring = ScoreRing()
+        vrow.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignVCenter)
         vt = QVBoxLayout()
-        self.verdict_title = label("", "H2")
-        self.verdict_sub = label("", "Muted")
+        vt.setSpacing(6)
+        vt.addStretch(1)
+        self.verdict_title = label("Not scanned yet", "H2")
+        self.verdict_sub = label(
+            "Press Scan now. Scanning only reads information - it changes nothing on your PC.",
+            "Muted",
+        )
+        self.verdict_meta = label("", "Small")
         vt.addWidget(self.verdict_title)
         vt.addWidget(self.verdict_sub)
+        vt.addWidget(self.verdict_meta)
+        vt.addStretch(1)
         vrow.addLayout(vt, 1)
         vl.addLayout(vrow)
-        self.verdict_card.setVisible(False)
         lay.addWidget(self.verdict_card)
 
+        self.tiles_grid = QGridLayout()
+        self.tiles_grid.setSpacing(12)
+        self.tiles_grid.setContentsMargins(0, 0, 0, 0)
+        tiles_box = QWidget()
+        tiles_box.setLayout(self.tiles_grid)
+        lay.addWidget(tiles_box)
+
+        self.attention_title = label("", "H2")
+        self.attention_title.setVisible(False)
+        lay.addWidget(self.attention_title)
         self.cards_box = QVBoxLayout()
         self.cards_box.setSpacing(12)
         lay.addLayout(self.cards_box)
+        self.extra_box = QVBoxLayout()
+        self.extra_box.setSpacing(12)
+        lay.addLayout(self.extra_box)
         lay.addStretch(1)
         return area
 
-    def _banner(self, text: str) -> QFrame:
+    def _banner(self, text: str, level: str | None = None) -> QFrame:
         frame = QFrame()
         frame.setObjectName("Banner")
         bl = QHBoxLayout(frame)
@@ -398,37 +420,80 @@ class MainWindow(QMainWindow):
         bl.addWidget(lab, 1)
         return frame
 
-    def _problem_card(self, f: Finding, first: bool) -> QFrame:
-        card, cl = _card("Card", (24, 18, 22, 18))
-        card.setStyleSheet(
-            f"QFrame#Card {{ border-left: 6px solid {theme.severity_color(f.severity)}; }}"
-        )
+    def _problem_card(
+        self, f: Finding, first: bool, muted: bool = False, fixed: bool = False
+    ) -> QFrame:
+        card, cl = _card("Card", (24, 16, 22, 16))
+        stripe = theme.color("border") if (muted or fixed) else theme.severity_color(f.severity)
+        card.setStyleSheet(f"QFrame#Card {{ border-left: 6px solid {stripe}; }}")
         top = QHBoxLayout()
-        badge = label(friendly.badge(f).upper(), "Badge", wrap=False)
-        badge.setStyleSheet(f"color:{theme.severity_color(f.severity)}")
+        if fixed:
+            badge_text, badge_col = "MARKED AS FIXED", theme.color("ok")
+        elif muted:
+            badge_text, badge_col = "NOT RECENTLY", theme.color("muted")
+        else:
+            badge_text, badge_col = friendly.badge(f).upper(), theme.severity_color(f.severity)
+        badge = label(badge_text, "Badge", wrap=False)
+        badge.setStyleSheet(f"color:{badge_col}")
         top.addWidget(badge)
-        if first and f.severity >= Severity.HIGH:
-            top.addWidget(label("  •  START HERE", "Badge", wrap=False))
+        if first and not muted and not fixed and f.severity >= Severity.HIGH:
+            top.addWidget(label("  \u2022  START HERE", "Badge", wrap=False))
         top.addStretch(1)
+        if is_event(f) and f.last_seen:
+            top.addWidget(label(f"Last time: {ago(f.last_seen)}", "Small", wrap=False))
         cl.addLayout(top)
         cl.addWidget(label(friendly.headline(f), "H3"))
-        cl.addWidget(label(friendly.explanation(f), "Muted"))
+        if not fixed:
+            cl.addWidget(label(friendly.explanation(f), "Muted"))
         row = QHBoxLayout()
         row.setSpacing(10)
-        if f.repair_ids:
-            rid = f.repair_ids[0]
-            fix = button(f"Fix it: {friendly.repair_name(rid)}", "Primary")
-            fix.clicked.connect(lambda _=False, r=rid: self.request_repair(r))
-            fix.setEnabled(not self._repair_running)
-            self._fix_buttons.append(fix)
-            row.addWidget(fix)
-        more = button("Tell me more")
-        more.clicked.connect(lambda _=False, fid=f.id: self.show_finding(fid))
-        row.addWidget(more)
+        if fixed:
+            again = button("Show again", "Link")
+            again.clicked.connect(lambda _=False, fid=f.id: self.unmark_fixed(fid))
+            row.addWidget(again)
+        else:
+            if f.repair_ids and not muted:
+                rid = f.repair_ids[0]
+                fix = button(f"Fix: {friendly.repair_name(rid)}", "Primary")
+                fix.clicked.connect(lambda _=False, r=rid, fid=f.id: self.request_repair(r, fid))
+                fix.setEnabled(not self._repair_running)
+                self._fix_buttons.append(fix)
+                row.addWidget(fix)
+            more = button("Details")
+            more.clicked.connect(lambda _=False, fid=f.id: self.show_finding(fid))
+            row.addWidget(more)
+            if is_event(f) and f.last_seen:
+                done = button("It's fixed", "Link")
+                done.setToolTip("Hide this until it happens again")
+                done.clicked.connect(lambda _=False, fid=f.id: self.mark_fixed(fid))
+                row.addWidget(done)
         row.addStretch(1)
         cl.addLayout(row)
         card.setProperty("finding_id", f.id)
         return card
+
+    def _folded(self, title: str, findings: list[Finding], kind: str):
+        holder = QWidget()
+        hl = QVBoxLayout(holder)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(12)
+        for f in findings:
+            card = self._problem_card(f, False, muted=kind == "old", fixed=kind == "fixed")
+            self.cards.append(card)
+            hl.addWidget(card)
+        holder.setVisible(False)
+        count = len(findings)
+        toggle = button(f"\u25b8  {title} ({count})", "Link")
+
+        def flip(_=False, t=toggle, h=holder, text=title, n=count) -> None:
+            h.setVisible(not h.isVisible())
+            arrow = "\u25be" if h.isVisible() else "\u25b8"
+            t.setText(f"{arrow}  {text} ({n})")
+
+        toggle.clicked.connect(flip)
+        self.extra_box.addWidget(toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        self.extra_box.addWidget(holder)
+        return toggle, holder
 
     # ------------------------------------------------------------------ fix tools
 
@@ -723,7 +788,7 @@ class MainWindow(QMainWindow):
         worker.failed.connect(self._on_scan_failed)
         self._scan_worker = worker
         self.scan_btn.setEnabled(False)
-        self.scan_btn.setText("Checking...")
+        self.scan_btn.setText("Scanning...")
         self.cancel_btn.setVisible(True)
         self.progress.setVisible(True)
         self.progress.setValue(0)
@@ -745,7 +810,7 @@ class MainWindow(QMainWindow):
     def _scan_done(self) -> None:
         self._scan_worker = None
         self.scan_btn.setEnabled(True)
-        self.scan_btn.setText("Check again")
+        self.scan_btn.setText("Scan again")
         self.cancel_btn.setVisible(False)
         self.progress.setVisible(False)
         self.progress_text.setVisible(False)
@@ -757,69 +822,110 @@ class MainWindow(QMainWindow):
 
     def _on_scan_finished(self, report: ScanReport) -> None:
         self._scan_done()
+        before = self._recheck_before
+        self._recheck_before = None
         self.report = report
-        self.hello.setText("Here's what we found")
-        self.hello_sub.setText(
-            f"Checked {report.started_at.astimezone():%A %d %B at %H:%M}. "
-            "Press the button again any time."
-        )
         self._render_results()
         self._render_fix_tools()
         self._fill_details()
         self._set_help_enabled(True)
+        if before is not None:
+            now_ids = {f.id for f in self.triaged().problems}
+            gone = [name for fid, name in before.items() if fid not in now_ids]
+            if gone:
+                items = "".join(f"<li>{html.escape(n)}</li>" for n in gone)
+                text = f"<b>Checked again - fixed:</b><ul style='margin:4px 0'>{items}</ul>"
+            else:
+                text = (
+                    "<b>Checked again.</b> The problems below are still there - try the "
+                    "next suggested fix, or open Details for more steps."
+                )
+            self.fixed_banner.layout().itemAt(0).widget().setText(text)
+            self.fixed_banner.setVisible(True)
+        else:
+            self.fixed_banner.setVisible(False)
         self.scan_completed.emit(report)
+
+    def triaged(self) -> Triage:
+        return triage(self.report.findings if self.report else [], self.settings.resolved)
 
     def _render_results(self) -> None:
         if self.report is None:
             return
-        mood, title, sub = friendly.verdict(self.report.findings)
-        symbol = {"ok": "✓", "warn": "!", "bad": "!"}[mood]
-        col = theme.color({"ok": "ok", "warn": "warn", "bad": "bad"}[mood])
-        self.verdict_icon.setText(symbol)
-        self.verdict_icon.setStyleSheet(
-            f"background:{col};color:{theme.color('card')};border-radius:32px;"
-            f"font-size:{theme.base_pt() * 2}pt;font-weight:800;"
+        t = self.triaged()
+        problems, minor = t.important, t.minor
+        score = t.score
+        self.ring.set_score(score)
+        n = len(problems)
+        minor_text = (
+            f"{len(minor)} minor issue{'s' if len(minor) != 1 else ''} below." if minor else ""
         )
-        self.verdict_title.setText(title)
-        self.verdict_sub.setText(sub)
-        self.verdict_card.setVisible(True)
+        if n == 0 and not minor:
+            self.verdict_title.setText("No problems found")
+            self.verdict_sub.setText("Your PC looks healthy.")
+        elif n == 0:
+            self.verdict_title.setText("No serious problems")
+            self.verdict_sub.setText(minor_text)
+        else:
+            serious = sum(1 for f in problems if f.severity >= Severity.HIGH)
+            word = "problem needs" if n == 1 else "problems need"
+            self.verdict_title.setText(f"{n} {word} attention")
+            lead = (
+                f"{serious} important - start with the first one."
+                if serious
+                else ("Nothing urgent.")
+            )
+            self.verdict_sub.setText(f"{lead} {minor_text}".strip())
+        when = self.report.started_at.astimezone()
+        self.hello_sub.setText(
+            f"Health: {score_label(score)}  \u2022  Last scan {when:%d %b %Y, %H:%M}"
+        )
+        meta = [f"Looked at the last {self.settings.lookback_days} days"]
+        if t.old:
+            meta.append(f"{len(t.old)} older problem(s) not happening any more")
+        if t.fixed:
+            meta.append(f"{len(t.fixed)} marked as fixed")
+        self.verdict_meta.setText("  \u2022  ".join(meta))
+
+        _clear(self.tiles_grid)
+        for i, info in enumerate(tiles_from_metrics(self.report.metrics)):
+            self.tiles_grid.addWidget(Tile(info), i // 3, i % 3)
 
         _clear(self.cards_box)
+        _clear(self.extra_box)
         self.cards = []
         self._fix_buttons = []
-        lowest = Severity.INFO if self.settings.show_details else Severity.LOW
-        main = [f for f in self.report.findings if f.severity >= Severity.MEDIUM]
-        small = [f for f in self.report.findings if lowest <= f.severity < Severity.MEDIUM]
-        if not main:
-            main, small = small, []
-        for i, f in enumerate(main):
+        shown = problems or minor
+        folded_minor = list(minor) if problems else []
+        if self.settings.show_details:
+            folded_minor += [f for f in t.active if f.severity < Severity.LOW]
+        self.attention_title.setText("Needs attention" if shown else "")
+        self.attention_title.setVisible(bool(shown))
+        for i, f in enumerate(shown):
             card = self._problem_card(f, first=(i == 0))
             self.cards.append(card)
             self.cards_box.addWidget(card)
-        self.small_toggle = None
-        if small:
-            holder = QWidget()
-            hl = QVBoxLayout(holder)
-            hl.setContentsMargins(0, 0, 0, 0)
-            hl.setSpacing(12)
-            for f in small:
-                card = self._problem_card(f, first=False)
-                self.cards.append(card)
-                hl.addWidget(card)
-            holder.setVisible(False)
-            count = len(small)
-            word = "smaller thing" if count == 1 else "smaller things"
-            toggle = button(f"\u25b8  Show {count} {word}", "Link")
+        self.minor_toggle = self.minor_holder = None
+        self.old_toggle = self.old_holder = None
+        self.fixed_toggle = self.fixed_holder = None
+        if folded_minor:
+            self.minor_toggle, self.minor_holder = self._folded(
+                "Minor issues", folded_minor, "minor"
+            )
+        if t.old:
+            self.old_toggle, self.old_holder = self._folded("Not happened recently", t.old, "old")
+        if t.fixed:
+            self.fixed_toggle, self.fixed_holder = self._folded("Marked as fixed", t.fixed, "fixed")
 
-            def flip(_=False, t=toggle, h=holder, n=count, w=word) -> None:
-                h.setVisible(not h.isVisible())
-                t.setText(f"\u25be  Hide {n} {w}" if h.isVisible() else f"\u25b8  Show {n} {w}")
+    def mark_fixed(self, fid: str) -> None:
+        self.settings.resolved[fid] = datetime.now(timezone.utc).isoformat()
+        self.settings.save(self.env.settings_path)
+        self._render_results()
 
-            toggle.clicked.connect(flip)
-            self.small_toggle = toggle
-            self.small_holder = holder
-            self.cards_box.addWidget(toggle, 0, Qt.AlignmentFlag.AlignLeft)
-            self.cards_box.addWidget(holder)
+    def unmark_fixed(self, fid: str) -> None:
+        self.settings.resolved.pop(fid, None)
+        self.settings.save(self.env.settings_path)
+        self._render_results()
 
     def _finding(self, fid: str | None) -> Finding | None:
         if not self.report or not fid:
@@ -848,7 +954,7 @@ class MainWindow(QMainWindow):
         _, elevate = self.env.executor.plan(repair)
         return ConfirmRepairDialog(repair, elevate, self.env.executor.dry_run, self)
 
-    def request_repair(self, rid: str) -> None:
+    def request_repair(self, rid: str, finding_id: str | None = None) -> None:
         if self._repair_running or rid not in REPAIRS:
             return
         if not self.env.system.is_windows and not self.env.executor.dry_run:
@@ -857,14 +963,15 @@ class MainWindow(QMainWindow):
         dialog = self.approval_dialog(rid)
         if dialog.exec() != ConfirmRepairDialog.DialogCode.Accepted:
             return
-        self.run_approved_repair(rid)
+        self.run_approved_repair(rid, finding_id)
 
-    def run_approved_repair(self, rid: str) -> None:
+    def run_approved_repair(self, rid: str, finding_id: str | None = None) -> None:
         """Called only after the person said yes in the dialog."""
         approval = self.env.executor.approvals.grant(rid, approved_by="gui")
         worker = RepairWorker(self.env, rid, approval)
         worker.finished.connect(self._on_repair_finished)
         worker.failed.connect(self._on_repair_failed)
+        self._fix_for = finding_id
         self._set_repair_running(True, rid)
         self._start(worker)
 
@@ -917,9 +1024,23 @@ class MainWindow(QMainWindow):
         )
         self.last_result.setVisible(True)
         self._refresh_history()
+        worked = outcome.status in ("success", "simulated")
+        fid, self._fix_for = self._fix_for, None
+        recheck = worked and self.report is not None and self._scan_worker is None
+        if recheck:
+            # Remember what needed attention before, to show what the fix changed.
+            self._recheck_before = {f.id: friendly.headline(f) for f in self.triaged().problems}
+        if worked and fid:
+            f = self._finding(fid)
+            if f is not None and is_event(f):
+                self.settings.resolved[fid] = datetime.now(timezone.utc).isoformat()
+                self.settings.save(self.env.settings_path)
         self.repair_completed.emit(outcome)
-        if self.isVisible() and QApplication.platformName() != "offscreen":
+        if QApplication.platformName() != "offscreen" and self.isVisible():
             QMessageBox.information(self, title, text)
+        if recheck:
+            self.go(P_HOME)
+            self.start_scan()
 
     def _on_repair_failed(self, message: str) -> None:
         self._set_repair_running(False)

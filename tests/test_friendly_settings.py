@@ -60,3 +60,42 @@ def test_settings_roundtrip_and_bad_files(tmp_path):
     s = Settings.load(p)
     assert s.theme == "system" and s.lookback_days == 30
     assert Settings().save(None) is False
+
+
+def test_triage_recent_old_fixed_and_score():
+    from datetime import datetime, timedelta, timezone
+
+    from crashlens.triage import ago, score_label, triage
+
+    now = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
+
+    def ev(fid, days, sev=Severity.HIGH):
+        return Finding(fid, fid, sev, Category.CRASH, "s", last_seen=now - timedelta(days=days))
+
+    recent = ev("bsod-9f", 1)
+    old = ev("unexpected-restart", 20)
+    fixed = ev("gpu-tdr", 3, Severity.MEDIUM)
+    came_back = ev("app-crash-x", 0.5, Severity.LOW)
+    state = Finding("disk-space-c", "full", Severity.HIGH, Category.STORAGE, "s")
+    resolved = {
+        "gpu-tdr": (now - timedelta(days=1)).isoformat(),  # last seen before -> fixed
+        "app-crash-x": (now - timedelta(days=2)).isoformat(),  # happened again after
+        "disk-space-c": now.isoformat(),  # state findings can't be hidden
+    }
+    t = triage([recent, old, fixed, came_back, state], resolved, now)
+    assert {f.id for f in t.active} == {"bsod-9f", "app-crash-x", "disk-space-c"}
+    assert [f.id for f in t.old] == ["unexpected-restart"]
+    assert [f.id for f in t.fixed] == ["gpu-tdr"]
+    assert t.score == round(100 * 0.82 * 0.98 * 0.82)
+    assert score_label(t.score) == "Fair" and score_label(90) == "Good"
+    assert score_label(10) == "Poor"
+    assert ago(now - timedelta(days=3), now) == "3 days ago"
+    assert ago(now - timedelta(hours=2), now) == "2 hours ago"
+
+
+def test_settings_resolved_is_cleaned(tmp_path):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"resolved": {"bsod-9f": "2026-11-01T00:00:00+00:00", "x": ""}}))
+    assert Settings.load(p).resolved == {"bsod-9f": "2026-11-01T00:00:00+00:00"}
+    p.write_text(json.dumps({"resolved": ["not", "a", "dict"]}))
+    assert Settings.load(p).resolved == {}

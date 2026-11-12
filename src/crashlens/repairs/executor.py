@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import re
 import secrets
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from crashlens.core.runner import POWERSHELL, CommandRunner
+from crashlens.core.runner import POWERSHELL, CommandRunner, _decode
+from crashlens.repairs import cleanup
 from crashlens.repairs.catalog import REPAIRS, Repair, RepairKind
 
 APPROVAL_TTL = timedelta(minutes=10)
@@ -124,21 +128,36 @@ def _cmdline(argv: tuple[str, ...]) -> str:
     return " ".join(parts)
 
 
-def elevated_argv(repair: Repair) -> tuple[str, ...]:
-    """Launch the repair in its own elevated console window via Windows' UAC prompt.
+# Characters that could break out of the quoted command line.
+_UNSAFE_PATH_CHARS = re.compile(r"[\'\"%!^&<>|`$;\r\n]")
 
-    The console stays open (cmd /k) so the user can read the tool's result.
-    The catalog guarantees there are no single quotes in any argument.
+
+def default_output_dir() -> Path:
+    """Where elevated fixes write their output. ProgramData paths never contain quotes."""
+    return Path(os.environ.get("ProgramData") or r"C:\ProgramData") / "CrashLens"
+
+
+def elevated_argv(repair: Repair, log_path: Path) -> tuple[str, ...]:
+    """Run the repair hidden with administrator rights (Windows asks via UAC), wait for
+    it, and save its output to ``log_path`` so CrashLens can read and explain it.
+
+    Exit code 1223 means the person said No in the Windows permission prompt.
+    The catalog guarantees there are no quotes in any argument, and the log path is
+    checked against a strict pattern.
     """
     inner = _cmdline(repair.argv)
-    if "'" in inner:
+    log = str(log_path)
+    absolute = log_path.is_absolute() or PureWindowsPath(log).is_absolute()
+    if "'" in inner or _UNSAFE_PATH_CHARS.search(log) or not absolute:
         raise ValueError("unsafe repair command")
+    folder = str(log_path.parent)
+    cmd = f'/c if not exist "{folder}" mkdir "{folder}" & {inner} > "{log}" 2>&1'
     script = (
         "$ErrorActionPreference='Stop';"
         "try { "
-        f"Start-Process -FilePath 'cmd.exe' -ArgumentList '/k {inner}' -Verb RunAs; exit 0"
-        " }"
-        " catch { exit 1223 }"
+        f"$p = Start-Process -FilePath 'cmd.exe' -ArgumentList '{cmd}' -Verb RunAs "
+        "-WindowStyle Hidden -PassThru -Wait; exit $p.ExitCode"
+        " } catch { exit 1223 }"
     )
     return (POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script)
 
@@ -153,6 +172,8 @@ class RepairExecutor:
         is_windows: bool,
         is_admin: bool,
         dry_run: bool = False,
+        output_dir: Path | None = None,
+        temp_roots: list[Path] | None = None,
     ) -> None:
         self.runner = runner
         self.approvals = approvals
@@ -160,11 +181,14 @@ class RepairExecutor:
         self.is_windows = is_windows
         self.is_admin = is_admin
         self.dry_run = dry_run
+        self.output_dir = output_dir or default_output_dir()
+        self.temp_roots = temp_roots  # None = the real temporary folders
 
-    def plan(self, repair: Repair) -> tuple[tuple[str, ...], bool]:
+    def plan(self, repair: Repair, log_path: Path | None = None) -> tuple[tuple[str, ...], bool]:
         """Return (argv, will_elevate) without running anything."""
         if repair.kind is RepairKind.TOOL and repair.needs_admin and not self.is_admin:
-            return elevated_argv(repair), True
+            log_path = log_path or self.output_dir / "fix-preview.txt"
+            return elevated_argv(repair, log_path), True
         return repair.argv, False
 
     def execute(self, repair_id: str, approval: Approval | None) -> RepairOutcome:
@@ -174,7 +198,8 @@ class RepairExecutor:
         self.approvals.consume(approval, repair_id)  # raises ApprovalError
         if approval is None:  # pragma: no cover - consume() already rejected it
             raise ApprovalError("This repair needs your approval first.")
-        argv, elevate = self.plan(repair)
+        log_path = self.output_dir / f"fix-{repair_id}-{approval.token[:8]}.txt"
+        argv, elevate = self.plan(repair, log_path)
         self.audit.write(
             "repair.approved",
             repair_id=repair_id,
@@ -194,7 +219,9 @@ class RepairExecutor:
             self.audit.write("repair.refused", repair_id=repair_id, reason="not windows")
             raise NotSupportedError("Repairs can only run on Windows.")
 
-        if repair.kind is RepairKind.OPEN:
+        if repair.kind is RepairKind.BUILTIN:
+            outcome = self._builtin(repair)
+        elif repair.kind is RepairKind.OPEN:
             res = self.runner.open(repair.argv[0], " ".join(repair.argv[1:]))
             if res.returncode == 1223:
                 outcome = RepairOutcome(
@@ -207,24 +234,18 @@ class RepairExecutor:
             else:
                 outcome = RepairOutcome(repair_id, "launched", f"Opened: {repair.title}.")
         elif elevate:
-            res = self.runner.run(argv, timeout=120)
-            if res.ok:
-                outcome = RepairOutcome(
-                    repair_id,
-                    "launched",
-                    "Started in a separate administrator window. Windows asked for permission; "
-                    "the result is shown in that window when it finishes.",
-                    returncode=res.returncode,
-                    elevated_window=True,
-                )
-            elif res.returncode == 1223:
+            res = self.runner.run(argv, timeout=repair.timeout_s + 120)
+            output = self._read_log(log_path)
+            if res.returncode == 1223:
                 outcome = RepairOutcome(
                     repair_id, "cancelled", "Administrator permission was not given.", 1223
                 )
+            elif res.timed_out:
+                outcome = RepairOutcome(repair_id, "failed", "The repair timed out.", None, output)
+            elif res.not_found:
+                outcome = RepairOutcome(repair_id, "failed", "Could not start the repair.")
             else:
-                outcome = RepairOutcome(
-                    repair_id, "failed", "Could not start the repair.", res.returncode, res.stderr
-                )
+                outcome = interpret(repair, res.returncode, output)
         else:
             res = self.runner.run(argv, timeout=repair.timeout_s)
             output = (res.stdout + ("\n" + res.stderr if res.stderr else ""))[-MAX_OUTPUT:]
@@ -241,6 +262,39 @@ class RepairExecutor:
             returncode=outcome.returncode,
         )
         return outcome
+
+    def _read_log(self, path: Path) -> str:
+        """Read and then remove CrashLens' own output file for an elevated fix."""
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return ""
+        with contextlib.suppress(OSError):
+            path.unlink()
+        return _decode(data)[-MAX_OUTPUT:]
+
+    def _builtin(self, repair: Repair) -> RepairOutcome:
+        if repair.id == "clean_temp":
+            roots = self.temp_roots
+            if roots is None:
+                roots = cleanup.temp_folders(self.is_admin)
+            try:
+                res = cleanup.clean_temp(roots)
+            except cleanup.UnsafeFolderError as exc:
+                return RepairOutcome(repair.id, "failed", f"Not cleaned: {exc}")
+            if res.files_deleted == 0:
+                msg = "There were no old temporary files to remove."
+            else:
+                msg = (
+                    f"Freed {res.freed_text} by removing {res.files_deleted} old temporary file(s)."
+                )
+            if res.skipped:
+                msg += f" {res.skipped} item(s) in use were left alone."
+            follow = []
+            if not self.is_admin:
+                follow.append("To clean more, also use 'Free up space' (Windows Storage settings).")
+            return RepairOutcome(repair.id, "success", msg, 0, follow_up=follow)
+        return RepairOutcome(repair.id, "failed", "Unknown built-in fix.")
 
 
 def interpret(repair: Repair, returncode: int, output: str) -> RepairOutcome:
@@ -318,6 +372,61 @@ def interpret(repair: Repair, returncode: int, output: str) -> RepairOutcome:
                     "Tools > Check, or run 'chkdsk /spotfix' as administrator."
                 ],
             )
+    if rid == "windows_update_scan" and returncode == 0:
+        return RepairOutcome(
+            rid,
+            "success",
+            "Windows Update is now checking for updates. They download and install in the "
+            "background.",
+            returncode,
+            output,
+            follow_up=["Open Windows Update later to see progress and restart if asked."],
+        )
+    if rid == "reset_windows_update":
+        if "crashlens-reset-complete" in text:
+            return RepairOutcome(
+                rid,
+                "success",
+                "Windows Update was reset.",
+                returncode,
+                output,
+                follow_up=["Restart the PC, then check for updates again."],
+            )
+        return RepairOutcome(
+            rid, "failed", "Windows Update could not be reset.", returncode, output
+        )
+    if rid == "rescan_devices" and returncode == 0:
+        return RepairOutcome(
+            rid,
+            "success",
+            "Windows looked for hardware again.",
+            returncode,
+            output,
+            follow_up=["If a device still doesn't work, check for Windows updates."],
+        )
+    if rid == "update_defender":
+        if "crashlens-defender-updated" in text:
+            return RepairOutcome(
+                rid, "success", "Virus protection is up to date.", returncode, output
+            )
+        return RepairOutcome(
+            rid,
+            "failed",
+            "Virus protection could not be updated. If you use another "
+            "antivirus, update it in that program.",
+            returncode,
+            output,
+        )
+    if rid == "quick_virus_scan":
+        if "crashlens-scan-complete" in text:
+            return RepairOutcome(
+                rid,
+                "success",
+                "Quick scan finished. Windows Security shows anything it found.",
+                returncode,
+                output,
+            )
+        return RepairOutcome(rid, "failed", "The virus scan did not run.", returncode, output)
     if returncode == 0:
         return RepairOutcome(rid, "success", "Finished successfully.", returncode, output)
     return RepairOutcome(

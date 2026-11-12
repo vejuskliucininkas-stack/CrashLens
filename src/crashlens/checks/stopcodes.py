@@ -50,7 +50,7 @@ _CODES: tuple[StopCode, ...] = (
         "A driver touched memory it was not allowed to at that moment.",
         ("A faulty or outdated driver", "Defective RAM", "Incompatible security software"),
         _DRIVER_STEPS + _MEMORY_STEPS[:1],
-        ("memory_diagnostic", "open_device_manager", "open_windows_update"),
+        ("memory_diagnostic", "open_device_manager", "windows_update_scan"),
     ),
     StopCode(
         0x1A,
@@ -110,7 +110,7 @@ _CODES: tuple[StopCode, ...] = (
         "A Windows system thread crashed - usually because of a driver.",
         ("Outdated or incompatible driver (graphics drivers are common)",),
         _DRIVER_STEPS,
-        ("open_device_manager", "open_windows_update"),
+        ("open_device_manager", "windows_update_scan"),
     ),
     StopCode(
         0x7F,
@@ -127,7 +127,7 @@ _CODES: tuple[StopCode, ...] = (
         ("Network, USB, graphics or storage drivers", "Power-management settings"),
         _DRIVER_STEPS
         + ("Try disabling Fast Startup if the problem appears around shutdown or sleep.",),
-        ("open_device_manager", "open_windows_update"),
+        ("open_device_manager", "windows_update_scan"),
     ),
     StopCode(
         0xC2,
@@ -151,7 +151,7 @@ _CODES: tuple[StopCode, ...] = (
         "A driver accessed memory incorrectly - very often a network or graphics driver.",
         ("Network (Wi-Fi/Ethernet) drivers", "Graphics drivers", "VPN or firewall drivers"),
         _DRIVER_STEPS,
-        ("open_device_manager", "open_windows_update"),
+        ("open_device_manager", "windows_update_scan"),
     ),
     StopCode(
         0xEF,
@@ -220,7 +220,7 @@ _CODES: tuple[StopCode, ...] = (
         ("Storage controller drivers or SSD firmware", "Other outdated drivers"),
         ("Update SSD firmware and storage/chipset drivers from the maker's website.",)
         + _DRIVER_STEPS[1:],
-        ("open_device_manager", "open_windows_update"),
+        ("open_device_manager", "windows_update_scan"),
     ),
     StopCode(
         0x139,

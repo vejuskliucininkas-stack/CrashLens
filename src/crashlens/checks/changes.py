@@ -163,7 +163,7 @@ class ChangesCheck(Check):
                         "Search Microsoft Support for the error code shown here.",
                         "If it keeps failing, run the DISM repair and System File Checker.",
                     ),
-                    repair_ids=("open_windows_update", "dism_restore", "sfc_scan"),
+                    repair_ids=("reset_windows_update", "dism_restore", "sfc_scan"),
                     occurrences=len(recent_failed),
                     last_seen=max(f[0] for f in recent_failed),
                 )

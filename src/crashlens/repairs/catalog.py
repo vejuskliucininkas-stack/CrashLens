@@ -18,6 +18,7 @@ from enum import Enum
 
 class RepairKind(str, Enum):
     TOOL = "tool"  # runs a built-in Windows repair or diagnostic tool
+    BUILTIN = "builtin"  # done by CrashLens itself (see repairs/cleanup.py)
     OPEN = "open"  # opens a Windows page or tool; the user decides what to do there
     # OPEN entries are started with ShellExecute (like double-clicking): argv[0] is the
     # document, URI or program and argv[1:] are its arguments.
@@ -133,6 +134,108 @@ def _build() -> dict[str, Repair]:
             changes_system=True,
             duration="1-3 minutes",
             timeout_s=900,
+        ),
+        Repair(
+            id="clean_temp",
+            title="Clean up temporary files",
+            description="Deletes leftover temporary files that programs and Windows no longer "
+            "need, to free up space on drive C:.",
+            what_happens="Deletes files older than 2 days from the temporary-files folders "
+            "(%TEMP%, and C:\\Windows\\Temp when CrashLens runs as administrator). Files in use "
+            "are skipped. Documents, pictures, downloads, the desktop and the Recycle Bin are "
+            "never touched.",
+            kind=RepairKind.BUILTIN,
+            argv=(),
+            changes_system=True,
+            duration="under a minute",
+            timeout_s=600,
+        ),
+        Repair(
+            id="windows_update_scan",
+            title="Check for Windows updates now",
+            description="Tells Windows Update to look for updates (including driver updates) "
+            "right away. Updates then download and install as usual.",
+            what_happens="Runs 'UsoClient StartInteractiveScan', the same as clicking 'Check for "
+            "updates' in Settings.",
+            kind=RepairKind.TOOL,
+            argv=("UsoClient.exe", "StartInteractiveScan"),
+            duration="starts straight away; updates install in the background",
+            timeout_s=120,
+        ),
+        Repair(
+            id="reset_windows_update",
+            title="Reset Windows Update",
+            description="Fixes Windows Update when updates keep failing: stops the update "
+            "services, sets the old download cache aside, and starts the services again.",
+            what_happens="Stops the Windows Update and BITS services, renames the folder "
+            "C:\\Windows\\SoftwareDistribution to SoftwareDistribution.old-<number> (nothing is "
+            "deleted), then starts the services again. Windows downloads the updates fresh.",
+            kind=RepairKind.TOOL,
+            argv=(
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Stop-Service -Name wuauserv,bits -Force -ErrorAction Stop; "
+                "Rename-Item -Path $env:windir\\SoftwareDistribution -NewName "
+                "SoftwareDistribution.old-$((Get-Date).Ticks) -ErrorAction "
+                "Continue; Start-Service -Name bits,wuauserv; "
+                "Write-Output CrashLens-reset-complete",
+            ),
+            needs_admin=True,
+            changes_system=True,
+            duration="under a minute",
+            timeout_s=300,
+        ),
+        Repair(
+            id="rescan_devices",
+            title="Re-detect devices",
+            description="Makes Windows look for hardware again and reinstall drivers it "
+            "already has. Often brings a device that stopped working back.",
+            what_happens="Runs 'pnputil /scan-devices', the same as 'Scan for hardware changes' "
+            "in Device Manager.",
+            kind=RepairKind.TOOL,
+            argv=("pnputil.exe", "/scan-devices"),
+            needs_admin=True,
+            duration="a few seconds",
+            timeout_s=300,
+        ),
+        Repair(
+            id="update_defender",
+            title="Update virus protection",
+            description="Downloads the newest virus definitions for Microsoft Defender.",
+            what_happens="Runs 'Update-MpSignature'. Only works when Microsoft Defender is your "
+            "antivirus.",
+            kind=RepairKind.TOOL,
+            argv=(
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Update-MpSignature -ErrorAction Stop; Write-Output CrashLens-defender-updated",
+            ),
+            needs_admin=True,
+            duration="under a minute (needs internet)",
+            timeout_s=600,
+        ),
+        Repair(
+            id="quick_virus_scan",
+            title="Quick virus scan",
+            description="Runs a Microsoft Defender quick scan of the places viruses usually hide.",
+            what_happens="Runs 'Start-MpScan -ScanType QuickScan'. Defender handles anything it "
+            "finds as usual.",
+            kind=RepairKind.TOOL,
+            argv=(
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-MpScan -ScanType QuickScan -ErrorAction Stop; "
+                "Write-Output CrashLens-scan-complete",
+            ),
+            needs_admin=True,
+            duration="5-15 minutes",
+            timeout_s=3600,
         ),
         Repair(
             id="memory_diagnostic",

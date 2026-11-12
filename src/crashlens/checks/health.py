@@ -53,6 +53,9 @@ class DiskSpaceCheck(Check):
                 continue
             pct = free / size * 100
             parts.append(f"{dev} {_fmt_gb(free)} free ({pct:.0f}%)")
+            ctx.metrics.setdefault("drives", []).append(
+                {"drive": dev, "label": str(r.get("VolumeName") or ""), "size": size, "free": free}
+            )
             system = dev.upper() == "C:"
             if pct < 5 or free < 5 * GB:
                 sev = Severity.HIGH if system else Severity.MEDIUM
@@ -82,7 +85,7 @@ class DiskSpaceCheck(Check):
                         "storage.",
                         "Uninstall programs and games you no longer use.",
                     ),
-                    repair_ids=("open_storage_settings",),
+                    repair_ids=("clean_temp", "open_storage_settings"),
                 )
             )
         return findings, "; ".join(parts) or "No drives with a known size."
@@ -298,7 +301,11 @@ class ProblemDevicesCheck(Check):
                             "If it broke after an update, use Roll Back Driver.",
                         )
                     ),
-                    repair_ids=("open_device_manager",),
+                    repair_ids=(
+                        ("rescan_devices",)
+                        if code == 14
+                        else ("rescan_devices", "windows_update_scan", "open_device_manager")
+                    ),
                 )
             )
         msg = f"{len(findings)} device(s) with problems." if findings else "All devices working."
@@ -335,6 +342,14 @@ class SystemStateCheck(Check):
         uptime = (ctx.now - boot) if boot else None
         total, free = _num(r.get("TotalKB")), _num(r.get("FreeKB"))
         used_pct = (1 - free / total) * 100 if total > 0 else None
+        ctx.metrics["os"] = {
+            "caption": str(r.get("Caption") or "Windows").replace("Microsoft ", "").strip(),
+            "build": str(r.get("Build") or ""),
+            "uptime_hours": round(uptime.total_seconds() / 3600, 1) if uptime else None,
+            "ram_total_gb": round(total / 1024 / 1024, 1) if total > 0 else None,
+            "ram_used_pct": round(used_pct) if used_pct is not None else None,
+            "reboot_pending": r.get("RebootPending") is True,
+        }
 
         if r.get("RebootPending") is True:
             findings.append(
@@ -433,6 +448,7 @@ class UpdatesCheck(Check):
         if last is None:
             raise Unavailable("The date of the last update is unknown.")
         age = (ctx.now - last).days
+        ctx.metrics["updates"] = {"days": age, "name": kb}
         msg = f"Last update {kb} installed {age} day(s) ago."
         if age < 45:
             return [], msg
@@ -448,7 +464,7 @@ class UpdatesCheck(Check):
                 "Open Windows Update and select 'Check for updates'.",
                 "If updates fail, note the error code shown there.",
             ),
-            repair_ids=("open_windows_update",),
+            repair_ids=("windows_update_scan", "reset_windows_update", "open_windows_update"),
         )
         return [finding], msg
 
@@ -490,6 +506,9 @@ class AntivirusCheck(Check):
         if not products:
             raise Unavailable("No antivirus status could be read.")
         active = [p for p in products if p[1]]
+        ctx.metrics["protection"] = [
+            {"name": n, "enabled": e, "up_to_date": c} for n, e, c in products
+        ]
         summary = ", ".join(
             f"{n} ({'on' if e else 'off'}{', definitions out of date' if e and not c else ''})"
             for n, e, c in products
@@ -519,7 +538,7 @@ class AntivirusCheck(Check):
                     category=Category.SECURITY,
                     summary="Your antivirus is on but its virus definitions are not current.",
                     recommendations=("Open Windows Security (or your antivirus) and update.",),
-                    repair_ids=("open_windows_security",),
+                    repair_ids=("update_defender", "open_windows_security"),
                 )
             ], summary
         return [], summary
@@ -542,6 +561,7 @@ class StartupAppsCheck(Check):
     def collect(self, ctx: CheckContext) -> tuple[list[Finding], str]:
         rows = run_ps_json(ctx.runner, STARTUP_QUERY)
         names = sorted({str(r.get("Name") or "").strip() for r in rows} - {""}, key=str.lower)
+        ctx.metrics["startup_count"] = len(names)
         msg = f"{len(names)} program(s) start with Windows."
         if len(names) < 12:
             return [], msg

@@ -16,7 +16,8 @@ possible, by an automated test.
 | Never disable Windows security | No catalog entry touches security settings; antivirus check is read-only and only opens Windows Security | `test_catalog_commands_are_safe` |
 | Elevation is visible | Non-admin repairs start through Windows' own UAC prompt in a visible console | `test_non_admin_uses_uac_window` |
 | Audit trail | Approvals and results are appended to `audit.log` (only an 8-character token prefix is logged) | `test_runs_tool_and_interprets_sfc_output` |
-| No user files deleted | Nothing in CrashLens deletes files. Reports refuse to overwrite unless confirmed (GUI save dialog / CLI `--force`) and are written atomically | `test_write_report_refuses_overwrite` |
+| Only temporary files can be deleted | The one fix that deletes ("Clean up temporary files", approval required) only touches files older than 2 days inside %TEMP% / C:\\Windows\\Temp, refuses any other folder, never follows links, skips locked files | `test_clean_temp_only_old_files_inside_temp`, `test_clean_temp_refuses_non_temp_folders` |
+| No user files deleted | Apart from temporary files, nothing in CrashLens deletes files. Reports refuse to overwrite unless confirmed (GUI save dialog / CLI `--force`) and are written atomically | `test_write_report_refuses_overwrite` |
 | Private data stays private | Reports remove user name, computer name, profile paths, e-mails, MAC addresses, serials by default | `test_redactor`, `test_full_demo_report_all_formats` |
 | Safe HTML reports | Every value is escaped; Content-Security-Policy `default-src 'none'`; no scripts | `test_html_escapes_everything` |
 | Demo never touches the system | Demo mode forces dry-run repairs | `test_demo_repair_is_always_simulated` |
