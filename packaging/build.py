@@ -1,4 +1,4 @@
-"""Build CrashLens.exe (desktop app) and crashlens-cli.exe (command line) with PyInstaller.
+"""Build CrashLens.exe (single file, double-click to run) and crashlens-cli.exe.
 
 Run from the repository root on Windows:
     pip install -e ".[gui,build]"
@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+COMMON = ["--noconfirm", "--clean", "--onefile", "--collect-submodules", "crashlens"]
 BUILDS = [
     [
         "--windowed",
@@ -26,6 +27,8 @@ BUILDS = [
         "--console",
         "--name",
         "crashlens-cli",
+        "--icon",
+        "packaging/crashlens.ico",
         "--exclude-module",
         "PySide6",
         "packaging/cli_entry.py",
@@ -35,20 +38,11 @@ BUILDS = [
 
 def main() -> int:
     for extra in BUILDS:
-        cmd = [
-            sys.executable,
-            "-m",
-            "PyInstaller",
-            "--noconfirm",
-            "--clean",
-            "--collect-submodules",
-            "crashlens",
-            *extra,
-        ]
-        print(">", " ".join(cmd))
+        cmd = [sys.executable, "-m", "PyInstaller", *COMMON, *extra]
+        print(">", " ".join(cmd), flush=True)
         if subprocess.run(cmd, cwd=ROOT, check=False).returncode != 0:
             return 1
-    print("\nBuilt:\n  dist/CrashLens/CrashLens.exe\n  dist/crashlens-cli/crashlens-cli.exe")
+    print("\nBuilt:\n  dist/CrashLens.exe\n  dist/crashlens-cli.exe")
     return 0
 
 

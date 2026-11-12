@@ -1,8 +1,7 @@
 name: Build CrashLens.exe
 
-# Builds a ready-to-run Windows app on every push to main.
-# Download it from the run's "Artifacts" section: CrashLens-windows.zip
-# Unzip it and double-click CrashLens.exe - no Python needed.
+# Builds a single-file Windows app on every push to main.
+# Download it from the run's "Artifacts" section and double-click CrashLens.exe.
 
 on:
   push:
@@ -22,11 +21,21 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install ".[gui,build]"
       - run: python packaging/build.py
-      - name: Smoke test the CLI exe
-        run: dist\crashlens-cli\crashlens-cli.exe --version
+      - name: Self-test the command-line exe
+        run: dist\crashlens-cli.exe --demo scan
+      - name: Self-test the app exe (opens offscreen, runs a demo check, closes)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $p = Start-Process -FilePath dist\CrashLens.exe -ArgumentList "--selftest" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "CrashLens.exe self-test failed with exit code $($p.ExitCode)" }
+      - name: Read-only check of this Windows machine
+        run: dist\crashlens-cli.exe scan --days 7
       - uses: actions/upload-artifact@v4
         with:
-          name: CrashLens-windows
+          name: CrashLens-exe
           path: |
-            dist/CrashLens/
+            dist/CrashLens.exe
+            dist/crashlens-cli.exe
           retention-days: 30
