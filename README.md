@@ -34,7 +34,9 @@ after you approve each one, and scanning never changes anything.
 - Whether virus protection is on and current (read-only)
 - Number of startup programs
 
-**Guided repairs - always with your approval**
+**Fix everything - always with your approval**
+- One "Fix everything" button runs every fix that applies (making a restore point
+  first), with a single Windows permission prompt, then checks again
 - System File Checker, DISM check/scan/repair, read-only drive scan (`chkdsk /scan`),
   create a restore point, Windows Memory Diagnostic
 - Shortcuts to Device Manager, Windows Update, Windows Security, Reliability Monitor,

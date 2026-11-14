@@ -13,7 +13,6 @@ from crashlens.repairs.executor import (
     AuditLog,
     NotSupportedError,
     RepairExecutor,
-    elevated_argv,
     interpret,
 )
 
@@ -130,33 +129,120 @@ def test_runs_tool_and_interprets_sfc_output(tmp_path):
     assert len(log[0]["approval"]) == 8  # only a prefix of the token is logged
 
 
-def test_non_admin_runs_hidden_with_uac_and_reads_result(tmp_path):
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
+def decoded_script(argv) -> str:
+    import base64
 
-    def elevated(argv):
-        # The hidden elevated process writes sfc's output (UTF-16) to CrashLens' log file.
-        log = re.search(r'> "([^"]+)"', argv[-1]).group(1)
-        Path(log).write_bytes(
-            "Windows Resource Protection did not find any integrity violations.".encode("utf-16-le")
-        )
+    b64 = re.search(r"-EncodedCommand (\S+)'", argv[-1]).group(1)
+    return base64.b64decode(b64).decode("utf-16-le")
+
+
+def fake_elevated(outputs: dict[str, tuple[str, int]], calls: list):
+    """Pretend to be the hidden admin PowerShell: write each fix's log file."""
+
+    def run(argv):
+        calls.append(argv)
+        script = decoded_script(argv)
+        for log in dict.fromkeys(re.findall(r"-FilePath '([^']+)'", script)):
+            rid = Path(log).name.split("-")[1] if "fix-" in log else ""
+            rid = next((k for k in outputs if f"fix-{k}-" in log), rid)
+            text, code = outputs.get(rid, ("", 0))
+            Path(log).parent.mkdir(parents=True, exist_ok=True)  # like New-Item
+            Path(log).write_text(f"\ufeff{text}\nCRASHLENS-EXIT={code}\n", encoding="utf-8")
         return CommandResult(argv, 0, "")
 
-    runner = FakeRunner(commands={"powershell.exe": elevated})
+    return run
+
+
+def test_non_admin_runs_hidden_with_uac_and_reads_result(tmp_path):
+    calls: list = []
+    runner = FakeRunner(
+        commands={
+            "powershell.exe": fake_elevated(
+                {
+                    "sfc_scan": (
+                        "Windows Resource Protection did not find any integrity violations.",
+                        0,
+                    )
+                },
+                calls,
+            )
+        }
+    )
     ex = RepairExecutor(
         runner,
         ApprovalRegistry(),
         AuditLog(None),
         is_windows=True,
         is_admin=False,
-        output_dir=out_dir,
+        output_dir=tmp_path,
     )
     res = ex.execute("sfc_scan", ex.approvals.grant("sfc_scan", "gui"))
     assert res.status == "success" and "No damaged" in res.message
-    script = runner.calls[0][-1]
-    assert "-Verb RunAs" in script and "-WindowStyle Hidden" in script and "-Wait" in script
-    assert "sfc.exe /scannow >" in script
-    assert list(out_dir.iterdir()) == []  # CrashLens removed its own output file
+    outer = calls[0][-1]
+    assert "-Verb RunAs" in outer and "-WindowStyle Hidden" in outer and "-Wait" in outer
+    assert "& 'sfc.exe' '/scannow'" in decoded_script(calls[0])
+    assert list(tmp_path.iterdir()) == []  # CrashLens removed its own output files
+
+
+def test_batch_asks_for_permission_once(tmp_path):
+    calls: list = []
+    runner = FakeRunner(
+        commands={
+            "powershell.exe": fake_elevated(
+                {
+                    "sfc_scan": ("did not find any integrity violations", 0),
+                    "reset_windows_update": ("CrashLens-reset-complete", 0),
+                    "rescan_devices": ("Scanning for device hardware changes", 0),
+                },
+                calls,
+            )
+        }
+    )
+    temp = tmp_path / "Temp"
+    temp.mkdir()
+    ex = RepairExecutor(
+        runner,
+        ApprovalRegistry(),
+        AuditLog(None),
+        is_windows=True,
+        is_admin=False,
+        output_dir=tmp_path / "out",
+        temp_roots=[temp],
+    )
+    ids = ["clean_temp", "sfc_scan", "reset_windows_update", "rescan_devices"]
+    seen = []
+    outcomes = ex.execute_many(
+        [(r, ex.approvals.grant(r, "gui")) for r in ids],
+        progress=lambda i, t, n: seen.append((i, t)),
+    )
+    assert [o.repair_id for o in outcomes] == ids
+    assert all(o.status == "success" for o in outcomes), outcomes
+    assert len(calls) == 1  # ONE elevated run for the three admin fixes
+    assert seen[0] == (0, 4)
+
+
+def test_batch_checks_every_approval_before_running(tmp_path):
+    runner = FakeRunner()
+    ex = make_executor(runner, tmp_path=tmp_path)
+    good = ex.approvals.grant("dism_check", "gui")
+    with pytest.raises(ApprovalError):
+        ex.execute_many([("dism_check", good), ("sfc_scan", None)])
+    assert runner.calls == []
+
+
+def test_batch_uac_declined_cancels_all(tmp_path):
+    runner = FakeRunner(commands={"powershell.exe": CommandResult(("p",), 1223, "")})
+    ex = RepairExecutor(
+        runner,
+        ApprovalRegistry(),
+        AuditLog(None),
+        is_windows=True,
+        is_admin=False,
+        output_dir=tmp_path,
+    )
+    ids = ["sfc_scan", "dism_check"]
+    outs = ex.execute_many([(r, ex.approvals.grant(r, "gui")) for r in ids])
+    assert [o.status for o in outs] == ["cancelled", "cancelled"]
 
 
 def test_uac_declined_is_cancelled(tmp_path):
@@ -212,18 +298,18 @@ def test_timeout_and_missing_tool(tmp_path):
     assert res.status == "failed" and "not found" in res.message
 
 
-def test_elevated_argv_rejects_quotes():
-    from dataclasses import replace
+def test_elevated_script_is_encoded_and_quote_safe():
+    from crashlens.repairs.executor import elevated_batch_argv
 
-    bad = replace(REPAIRS["sfc_scan"], argv=("sfc.exe", "x'; Remove-Item C:\\ '"))
+    argv = elevated_batch_argv([(REPAIRS["sfc_scan"], Path("/x/O'Brien; rm -rf/log.txt"))])
+    outer = argv[-1]
+    assert "O'Brien" not in outer  # path only inside the encoded part
+    script = decoded_script(argv)
+    assert "-FilePath '/x/O''Brien; rm -rf/log.txt'" in script
     with pytest.raises(ValueError):
-        elevated_argv(bad, Path(r"C:\ProgramData\CrashLens\x.txt"))
+        elevated_batch_argv([(REPAIRS["sfc_scan"], Path("relative.txt"))])
     with pytest.raises(ValueError):
-        elevated_argv(REPAIRS["sfc_scan"], Path("/x/O'Brien/x.txt"))
-    with pytest.raises(ValueError):
-        elevated_argv(REPAIRS["sfc_scan"], Path("/x/a & del/x.txt"))
-    with pytest.raises(ValueError):
-        elevated_argv(REPAIRS["sfc_scan"], Path("relative.txt"))
+        elevated_batch_argv([(REPAIRS["open_device_manager"], Path("/x/a.txt"))])
 
 
 @pytest.mark.parametrize(

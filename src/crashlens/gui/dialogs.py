@@ -200,3 +200,114 @@ class FindingDialog(QDialog):
     def _fix(self, rid: str) -> None:
         self.done(QDialog.DialogCode.Accepted)
         self.fix_requested.emit(rid)
+
+
+class FixAllDialog(QDialog):
+    """Shows every fix 'Fix everything' will run, lets the person untick any, and asks once.
+    'Cancel' is the default button."""
+
+    def __init__(self, plan, will_elevate: bool, dry_run: bool, parent=None) -> None:
+        from PySide6.QtWidgets import QCheckBox
+
+        from crashlens.repairs.catalog import REPAIRS
+
+        super().__init__(parent)
+        self.plan = plan
+        self.setWindowTitle("Fix everything")
+        self.resize(640, 640)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body = QWidget()
+        body.setObjectName("Page")
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(28, 24, 28, 12)
+        lay.setSpacing(10)
+        lay.addWidget(label("Fix everything", "H2"))
+        lay.addWidget(
+            label(
+                "CrashLens will run these fixes one after another. Untick anything you don't "
+                "want. None of them delete your documents, photos or programs.",
+                "Muted",
+            )
+        )
+
+        self.boxes: dict[str, QCheckBox] = {}
+        for step in plan.steps:
+            r = REPAIRS[step.repair_id]
+            card = QFrame()
+            card.setObjectName("Card")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(16, 12, 16, 12)
+            cl.setSpacing(4)
+            box = QCheckBox(friendly.repair_name(step.repair_id))
+            box.setChecked(True)
+            f = box.font()
+            f.setBold(True)
+            box.setFont(f)
+            self.boxes[step.repair_id] = box
+            cl.addWidget(box)
+            if step.findings:
+                why = "; ".join(friendly.headline(x) for x in step.findings[:3])
+                cl.addWidget(label(f"For: {why}", "Small"))
+            elif step.repair_id == "restore_point":
+                cl.addWidget(label("Safety first: lets you undo the changes later.", "Small"))
+            cl.addWidget(label(f"{friendly.repair_text(step.repair_id)}  ({r.duration})", "Small"))
+            lay.addWidget(card)
+
+        notes = []
+        if will_elevate:
+            notes.append(
+                "<b>Windows will ask for permission once.</b> When you see "
+                "“Do you want to allow this app to make changes?”, click "
+                "<b>Yes</b>."
+            )
+        if dry_run:
+            notes.append("<b>Demo:</b> this is practice - nothing will really happen.")
+        if notes:
+            n = label("<br>".join(notes))
+            n.setTextFormat(Qt.TextFormat.RichText)
+            lay.addWidget(n)
+
+        if plan.manual:
+            lay.addWidget(label("You'll need to do these yourself", "H3"))
+            items = "".join(
+                f"<li><b>{html.escape(friendly.headline(f))}</b>"
+                + (f" - {html.escape(f.recommendations[0])}" if f.recommendations else "")
+                + "</li>"
+                for f in plan.manual
+            )
+            m = label(f"<ul style='margin-left:-20px'>{items}</ul>", "Small")
+            m.setTextFormat(Qt.TextFormat.RichText)
+            lay.addWidget(m)
+        lay.addStretch(1)
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(28, 8, 28, 18)
+        row.addStretch(1)
+        self.cancel_button = button("Cancel")
+        self.start_button = button("Start fixing", "Primary")
+        self.cancel_button.setDefault(True)
+        self.cancel_button.setAutoDefault(True)
+        self.start_button.setAutoDefault(False)
+        self.cancel_button.clicked.connect(self.reject)
+        self.start_button.clicked.connect(self.accept)
+        for box in self.boxes.values():
+            box.toggled.connect(self._update)
+        row.addWidget(self.cancel_button)
+        row.addWidget(self.start_button)
+        outer.addLayout(row)
+        self._update()
+        self.cancel_button.setFocus()
+
+    def selected_ids(self) -> list[str]:
+        return [rid for rid, box in self.boxes.items() if box.isChecked()]
+
+    def _update(self) -> None:
+        n = len(self.selected_ids())
+        self.start_button.setEnabled(n > 0)
+        self.start_button.setText(f"Start fixing ({n})" if n else "Start fixing")

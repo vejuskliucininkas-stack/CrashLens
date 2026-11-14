@@ -205,3 +205,48 @@ def test_cancel_scan(qtbot, window):
         window.start_scan()
         window.cancel_scan()
     assert blocker.args[0] is window.report
+
+
+def test_fix_everything_dialog_defaults_to_cancel(qtbot, window):
+    from crashlens.gui.dialogs import FixAllDialog  # noqa: F401
+
+    scan(qtbot, window)
+    assert window.fix_all_btn.isVisibleTo(window)
+    assert window.fix_all_btn.text().startswith("Fix everything (")
+    dlg = window.fix_all_dialog()
+    qtbot.addWidget(dlg)
+    assert dlg.cancel_button.isDefault() and not dlg.start_button.isDefault()
+    assert dlg.selected_ids() == window.plan.repair_ids
+    dlg.boxes["clean_temp"].setChecked(False)
+    assert "clean_temp" not in dlg.selected_ids()
+    for box in dlg.boxes.values():
+        box.setChecked(False)
+    assert not dlg.start_button.isEnabled()
+    texts = " ".join(lab.text() for lab in dlg.findChildren(QLabel))
+    assert "do these yourself" in texts and "restart" in texts.lower()
+
+
+def test_fix_everything_cancel_runs_nothing(qtbot, window, monkeypatch):
+    from crashlens.gui.dialogs import FixAllDialog
+
+    scan(qtbot, window)
+    monkeypatch.setattr(FixAllDialog, "exec", lambda self: FixAllDialog.DialogCode.Rejected)
+    window.fix_everything()
+    assert window.env.audit.read() == []
+
+
+def test_fix_everything_runs_marks_fixed_and_rechecks(qtbot, window, monkeypatch):
+    from crashlens.gui.dialogs import FixAllDialog
+
+    scan(qtbot, window)
+    monkeypatch.setattr(FixAllDialog, "exec", lambda self: FixAllDialog.DialogCode.Accepted)
+    expected = list(window.plan.repair_ids)
+    with qtbot.waitSignal(window.scan_completed, timeout=15000):
+        window.fix_everything()
+    finished = [e["repair_id"] for e in window.env.audit.read() if e["event"] == "repair.finished"]
+    assert finished == expected
+    # event problems fixed by these fixes are marked (gpu-tdr via 'check for updates')
+    assert "gpu-tdr" in window.settings.resolved
+    assert window.fixed_banner.isVisibleTo(window)
+    assert "fixed" in window.fixed_banner.findChild(QLabel).text()
+    assert not window._repair_running

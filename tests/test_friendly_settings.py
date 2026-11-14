@@ -99,3 +99,28 @@ def test_settings_resolved_is_cleaned(tmp_path):
     assert Settings.load(p).resolved == {"bsod-9f": "2026-11-01T00:00:00+00:00"}
     p.write_text(json.dumps({"resolved": ["not", "a", "dict"]}))
     assert Settings.load(p).resolved == {}
+
+
+def test_fix_plan_picks_real_fixes_and_restore_point_first():
+    from crashlens.fixplan import build_plan
+    from crashlens.repairs.catalog import RepairKind
+    from crashlens.triage import triage
+
+    report = Scanner(demo_runner(), demo_system(), demo=True).run()
+    plan = build_plan(triage(report.findings))
+    ids = plan.repair_ids
+    assert ids[0] == "restore_point"
+    assert "clean_temp" in ids and "reset_windows_update" in ids
+    assert len(ids) == len(set(ids))  # merged duplicates
+    for rid in ids:
+        assert REPAIRS[rid].kind is not RepairKind.OPEN
+        assert rid != "memory_diagnostic"
+    assert any(f.id == "reboot-pending" for f in plan.manual)
+
+
+def test_fix_plan_empty_when_healthy():
+    from crashlens.fixplan import build_plan
+    from crashlens.triage import triage
+
+    plan = build_plan(triage([F("reboot-pending", sev=Severity.MEDIUM)]))
+    assert not plan and [f.id for f in plan.manual] == ["reboot-pending"]

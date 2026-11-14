@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
-import re
 import secrets
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PureWindowsPath
@@ -128,38 +129,83 @@ def _cmdline(argv: tuple[str, ...]) -> str:
     return " ".join(parts)
 
 
-# Characters that could break out of the quoted command line.
-_UNSAFE_PATH_CHARS = re.compile(r"[\'\"%!^&<>|`$;\r\n]")
-
-
 def default_output_dir() -> Path:
     """Where elevated fixes write their output. ProgramData paths never contain quotes."""
     return Path(os.environ.get("ProgramData") or r"C:\ProgramData") / "CrashLens"
 
 
-def elevated_argv(repair: Repair, log_path: Path) -> tuple[str, ...]:
-    """Run the repair hidden with administrator rights (Windows asks via UAC), wait for
-    it, and save its output to ``log_path`` so CrashLens can read and explain it.
+def _ps_quote(value: str) -> str:
+    """Single-quoted PowerShell string literal (quotes doubled)."""
+    return "'" + value.replace("'", "''") + "'"
 
-    Exit code 1223 means the person said No in the Windows permission prompt.
-    The catalog guarantees there are no quotes in any argument, and the log path is
-    checked against a strict pattern.
+
+EXIT_MARKER = "CRASHLENS-EXIT="
+
+
+def elevated_batch_argv(items: list[tuple[Repair, Path]]) -> tuple[str, ...]:
+    """Run one or more admin repairs hidden, with ONE Windows permission prompt.
+
+    The commands come only from the repair catalog. They are put in a small
+    PowerShell script, passed Base64-encoded (-EncodedCommand), so no quoting can
+    break out. Each repair writes its output and exit code to its own log file,
+    which CrashLens reads back and explains. Exit code 1223 = the person said No.
     """
-    inner = _cmdline(repair.argv)
-    log = str(log_path)
-    absolute = log_path.is_absolute() or PureWindowsPath(log).is_absolute()
-    if "'" in inner or _UNSAFE_PATH_CHARS.search(log) or not absolute:
-        raise ValueError("unsafe repair command")
-    folder = str(log_path.parent)
-    cmd = f'/c if not exist "{folder}" mkdir "{folder}" & {inner} > "{log}" 2>&1'
-    script = (
+    if not items:
+        raise ValueError("nothing to run")
+    lines = ["$ErrorActionPreference = 'Continue'", "$orig = [Console]::OutputEncoding"]
+    folders = []
+    for repair, log_path in items:
+        log = str(log_path)
+        if not (log_path.is_absolute() or PureWindowsPath(log).is_absolute()):
+            raise ValueError("log path must be absolute")
+        if repair.kind is not RepairKind.TOOL or not repair.argv:
+            raise ValueError(f"{repair.id} cannot run elevated")
+        folder = str(log_path.parent)
+        if folder not in folders:
+            folders.append(folder)
+            lines.append(
+                f"New-Item -ItemType Directory -Force -Path {_ps_quote(folder)} | Out-Null"
+            )
+        # sfc.exe writes UTF-16; everything else uses the console code page.
+        enc = "[Text.Encoding]::Unicode" if repair.argv[0].lower() == "sfc.exe" else "$orig"
+        args = " ".join(_ps_quote(a) for a in repair.argv)
+        q = _ps_quote(log)
+        lines += [
+            f"[Console]::OutputEncoding = {enc}",
+            f"& {args} *>&1 | Out-File -FilePath {q} -Encoding utf8",
+            f'"{EXIT_MARKER}$LASTEXITCODE" | Out-File -FilePath {q} -Encoding utf8 -Append',
+        ]
+    lines.append("exit 0")
+    encoded = base64.b64encode("\n".join(lines).encode("utf-16-le")).decode("ascii")
+    outer = (
         "$ErrorActionPreference='Stop';"
         "try { "
-        f"$p = Start-Process -FilePath 'cmd.exe' -ArgumentList '{cmd}' -Verb RunAs "
-        "-WindowStyle Hidden -PassThru -Wait; exit $p.ExitCode"
+        "$p = Start-Process -FilePath 'powershell.exe' -ArgumentList "
+        f"'-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand {encoded}' "
+        "-Verb RunAs -WindowStyle Hidden -PassThru -Wait; exit $p.ExitCode"
         " } catch { exit 1223 }"
     )
-    return (POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script)
+    return (POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", outer)
+
+
+def elevated_argv(repair: Repair, log_path: Path) -> tuple[str, ...]:
+    return elevated_batch_argv([(repair, log_path)])
+
+
+def split_exit(output: str) -> tuple[int | None, str]:
+    """Take the exit code CrashLens appended to a log, and return it with the rest."""
+    code = None
+    kept = []
+    for line in output.splitlines():
+        stripped = line.strip().lstrip("\ufeff")
+        if stripped.startswith(EXIT_MARKER):
+            try:
+                code = int(stripped[len(EXIT_MARKER) :] or 0)
+            except ValueError:
+                code = None
+        else:
+            kept.append(line)
+    return code, "\n".join(kept)
 
 
 class RepairExecutor:
@@ -192,76 +238,122 @@ class RepairExecutor:
         return repair.argv, False
 
     def execute(self, repair_id: str, approval: Approval | None) -> RepairOutcome:
-        if repair_id not in REPAIRS:
-            raise KeyError(f"Unknown repair '{repair_id}'")
-        repair = REPAIRS[repair_id]
-        self.approvals.consume(approval, repair_id)  # raises ApprovalError
-        if approval is None:  # pragma: no cover - consume() already rejected it
-            raise ApprovalError("This repair needs your approval first.")
-        log_path = self.output_dir / f"fix-{repair_id}-{approval.token[:8]}.txt"
-        argv, elevate = self.plan(repair, log_path)
-        self.audit.write(
-            "repair.approved",
-            repair_id=repair_id,
-            approved_by=approval.approved_by,
-            approval=approval.token[:8],
-            argv=list(repair.argv),
-            elevated=elevate,
-            dry_run=self.dry_run,
-        )
-        if self.dry_run:
-            outcome = RepairOutcome(
-                repair_id, "simulated", f"Dry run - would run: {_cmdline(repair.argv)}"
-            )
-            self.audit.write("repair.finished", repair_id=repair_id, status=outcome.status)
-            return outcome
-        if not self.is_windows:
-            self.audit.write("repair.refused", repair_id=repair_id, reason="not windows")
-            raise NotSupportedError("Repairs can only run on Windows.")
+        return self.execute_many([(repair_id, approval)])[0]
 
+    def execute_many(
+        self,
+        items: list[tuple[str, Approval | None]],
+        progress: Callable[[int, int, str], None] | None = None,
+    ) -> list[RepairOutcome]:
+        """Run several approved repairs. Every approval is checked BEFORE anything runs.
+        Admin repairs are grouped so Windows asks for permission only once."""
+        for rid, _ in items:
+            if rid not in REPAIRS:
+                raise KeyError(f"Unknown repair '{rid}'")
+        for rid, approval in items:
+            self.approvals.consume(approval, rid)  # raises ApprovalError
+        plans = []
+        for rid, approval in items:
+            if approval is None:  # pragma: no cover - consume() already rejected it
+                raise ApprovalError("This repair needs your approval first.")
+            repair = REPAIRS[rid]
+            log_path = self.output_dir / f"fix-{rid}-{approval.token[:8]}.txt"
+            _, elevate = self.plan(repair, log_path)
+            self.audit.write(
+                "repair.approved",
+                repair_id=rid,
+                approved_by=approval.approved_by,
+                approval=approval.token[:8],
+                argv=list(repair.argv),
+                elevated=elevate,
+                dry_run=self.dry_run,
+            )
+            plans.append((repair, log_path, elevate))
+
+        outcomes: dict[int, RepairOutcome] = {}
+        total = len(plans)
+        if self.dry_run:
+            for i, (repair, _, _) in enumerate(plans):
+                outcomes[i] = RepairOutcome(
+                    repair.id, "simulated", f"Dry run - would run: {_cmdline(repair.argv)}"
+                )
+        elif not self.is_windows:
+            for repair, _, _ in plans:
+                self.audit.write("repair.refused", repair_id=repair.id, reason="not windows")
+            raise NotSupportedError("Repairs can only run on Windows.")
+        else:
+            elevated = [(i, r, log) for i, (r, log, e) in enumerate(plans) if e]
+            done = 0
+            if elevated:
+                if progress:
+                    names = ", ".join(r.title for _, r, _ in elevated)
+                    progress(done, total, names)
+                for i, outcome in zip(
+                    [i for i, _, _ in elevated], self._run_elevated(elevated), strict=True
+                ):
+                    outcomes[i] = outcome
+                done += len(elevated)
+            for i, (repair, _, elevate) in enumerate(plans):
+                if elevate:
+                    continue
+                if progress:
+                    progress(done, total, repair.title)
+                outcomes[i] = self._run_one(repair)
+                done += 1
+        result = [outcomes[i] for i in range(total)]
+        for o in result:
+            self.audit.write(
+                "repair.finished", repair_id=o.repair_id, status=o.status, returncode=o.returncode
+            )
+        return result
+
+    def _run_elevated(self, items: list[tuple[int, Repair, Path]]) -> list[RepairOutcome]:
+        argv = elevated_batch_argv([(r, log) for _, r, log in items])
+        timeout = sum(r.timeout_s for _, r, _ in items) + 120
+        res = self.runner.run(argv, timeout=timeout)
+        out = []
+        for _, repair, log in items:
+            code, output = split_exit(self._read_log(log))
+            if res.returncode == 1223:
+                out.append(
+                    RepairOutcome(
+                        repair.id, "cancelled", "Administrator permission was not given.", 1223
+                    )
+                )
+            elif res.not_found:
+                out.append(RepairOutcome(repair.id, "failed", "Could not start the repair."))
+            elif res.timed_out and code is None:
+                out.append(
+                    RepairOutcome(repair.id, "failed", "The repair timed out.", None, output)
+                )
+            elif code is None and not output.strip():
+                out.append(RepairOutcome(repair.id, "failed", "The repair did not run."))
+            else:
+                out.append(interpret(repair, code if code is not None else 0, output))
+        return out
+
+    def _run_one(self, repair: Repair) -> RepairOutcome:
+        rid = repair.id
         if repair.kind is RepairKind.BUILTIN:
-            outcome = self._builtin(repair)
-        elif repair.kind is RepairKind.OPEN:
+            return self._builtin(repair)
+        if repair.kind is RepairKind.OPEN:
             res = self.runner.open(repair.argv[0], " ".join(repair.argv[1:]))
             if res.returncode == 1223:
-                outcome = RepairOutcome(
-                    repair_id, "cancelled", "Administrator permission was not given.", 1223
+                return RepairOutcome(
+                    rid, "cancelled", "Administrator permission was not given.", 1223
                 )
-            elif not res.ok:
-                outcome = RepairOutcome(
-                    repair_id, "failed", f"Could not open it: {res.stderr}", res.returncode
+            if not res.ok:
+                return RepairOutcome(
+                    rid, "failed", f"Could not open it: {res.stderr}", res.returncode
                 )
-            else:
-                outcome = RepairOutcome(repair_id, "launched", f"Opened: {repair.title}.")
-        elif elevate:
-            res = self.runner.run(argv, timeout=repair.timeout_s + 120)
-            output = self._read_log(log_path)
-            if res.returncode == 1223:
-                outcome = RepairOutcome(
-                    repair_id, "cancelled", "Administrator permission was not given.", 1223
-                )
-            elif res.timed_out:
-                outcome = RepairOutcome(repair_id, "failed", "The repair timed out.", None, output)
-            elif res.not_found:
-                outcome = RepairOutcome(repair_id, "failed", "Could not start the repair.")
-            else:
-                outcome = interpret(repair, res.returncode, output)
-        else:
-            res = self.runner.run(argv, timeout=repair.timeout_s)
-            output = (res.stdout + ("\n" + res.stderr if res.stderr else ""))[-MAX_OUTPUT:]
-            if res.timed_out:
-                outcome = RepairOutcome(repair_id, "failed", "The repair timed out.", None, output)
-            elif res.not_found:
-                outcome = RepairOutcome(repair_id, "failed", "The Windows tool was not found.")
-            else:
-                outcome = interpret(repair, res.returncode, output)
-        self.audit.write(
-            "repair.finished",
-            repair_id=repair_id,
-            status=outcome.status,
-            returncode=outcome.returncode,
-        )
-        return outcome
+            return RepairOutcome(rid, "launched", f"Opened: {repair.title}.")
+        res = self.runner.run(repair.argv, timeout=repair.timeout_s)
+        output = (res.stdout + ("\n" + res.stderr if res.stderr else ""))[-MAX_OUTPUT:]
+        if res.timed_out:
+            return RepairOutcome(rid, "failed", "The repair timed out.", None, output)
+        if res.not_found:
+            return RepairOutcome(rid, "failed", "The Windows tool was not found.")
+        return interpret(repair, res.returncode, output)
 
     def _read_log(self, path: Path) -> str:
         """Read and then remove CrashLens' own output file for an elevated fix."""

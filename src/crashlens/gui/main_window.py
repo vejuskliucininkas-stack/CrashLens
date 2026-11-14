@@ -42,11 +42,12 @@ from crashlens.core.models import Finding, ScanReport, Severity
 from crashlens.core.platform import relaunch_as_admin
 from crashlens.core.settings import LOOKBACK_CHOICES, Settings
 from crashlens.environment import Environment
+from crashlens.fixplan import FixPlan, build_plan
 from crashlens.gui import friendly, logo
 from crashlens.gui import style as theme
 from crashlens.gui.dashboard import ScoreRing, Tile, tiles_from_metrics
-from crashlens.gui.dialogs import ConfirmRepairDialog, FindingDialog, button, label
-from crashlens.gui.workers import RepairWorker, ScanWorker
+from crashlens.gui.dialogs import ConfirmRepairDialog, FindingDialog, FixAllDialog, button, label
+from crashlens.gui.workers import BatchRepairWorker, RepairWorker, ScanWorker
 from crashlens.repairs.catalog import REPAIRS
 from crashlens.report import render, write_report
 from crashlens.triage import Triage, ago, is_event, score_label, triage
@@ -150,7 +151,8 @@ class MainWindow(QMainWindow):
         self._threads: list[tuple[QThread, object]] = []
         self._scan_worker: ScanWorker | None = None
         self._repair_running = False
-        self._fix_for: str | None = None
+        self._fix_targets: dict[str, list[str]] = {}
+        self.plan = FixPlan()
         self._recheck_before: dict[str, str] | None = None
         self._fix_buttons: list[QPushButton] = []
         self.cards: list[QFrame] = []
@@ -388,6 +390,10 @@ class MainWindow(QMainWindow):
         vt.addWidget(self.verdict_meta)
         vt.addStretch(1)
         vrow.addLayout(vt, 1)
+        self.fix_all_btn = button("Fix everything", "Big")
+        self.fix_all_btn.clicked.connect(self.fix_everything)
+        self.fix_all_btn.setVisible(False)
+        vrow.addWidget(self.fix_all_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         vl.addLayout(vrow)
         lay.addWidget(self.verdict_card)
 
@@ -887,6 +893,13 @@ class MainWindow(QMainWindow):
             meta.append(f"{len(t.fixed)} marked as fixed")
         self.verdict_meta.setText("  \u2022  ".join(meta))
 
+        self.plan = build_plan(t)
+        self.fix_all_btn.setVisible(bool(self.plan))
+        self.fix_all_btn.setEnabled(not self._repair_running)
+        if self.plan:
+            n_fix = len([s for s in self.plan.steps if s.repair_id != "restore_point"])
+            self.fix_all_btn.setText(f"Fix everything ({n_fix})")
+
         _clear(self.tiles_grid)
         for i, info in enumerate(tiles_from_metrics(self.report.metrics)):
             self.tiles_grid.addWidget(Tile(info), i // 3, i % 3)
@@ -969,11 +982,62 @@ class MainWindow(QMainWindow):
         """Called only after the person said yes in the dialog."""
         approval = self.env.executor.approvals.grant(rid, approved_by="gui")
         worker = RepairWorker(self.env, rid, approval)
-        worker.finished.connect(self._on_repair_finished)
+        worker.finished.connect(self._on_single_fix)
         worker.failed.connect(self._on_repair_failed)
-        self._fix_for = finding_id
+        self._fix_targets = {rid: [finding_id] if finding_id else []}
         self._set_repair_running(True, rid)
         self._start(worker)
+
+    def _on_single_fix(self, outcome) -> None:
+        self._after_fixes([outcome])
+
+    # ------------------------------------------------------------------ fix everything
+
+    def fix_all_dialog(self) -> FixAllDialog | None:
+        if self.report is None or not self.plan:
+            return None
+        elevate = any(self.env.executor.plan(REPAIRS[rid])[1] for rid in self.plan.repair_ids)
+        return FixAllDialog(self.plan, elevate, self.env.executor.dry_run, self)
+
+    def fix_everything(self) -> None:
+        if self._repair_running:
+            return
+        if not self.env.system.is_windows and not self.env.executor.dry_run:
+            QMessageBox.information(self, APP_NAME, "Fixes only work on Windows.")
+            return
+        dialog = self.fix_all_dialog()
+        if dialog is None or dialog.exec() != FixAllDialog.DialogCode.Accepted:
+            return
+        self.run_approved_batch(dialog.selected_ids(), self.plan)
+
+    def run_approved_batch(self, repair_ids: list[str], plan: FixPlan) -> None:
+        """Called only after the person said yes to this list in the Fix everything dialog."""
+        if not repair_ids:
+            return
+        items = [
+            (rid, self.env.executor.approvals.grant(rid, approved_by="gui-fix-all"))
+            for rid in repair_ids
+        ]
+        targets = {s.repair_id: [f.id for f in s.findings] for s in plan.steps}
+        self._fix_targets = {rid: targets.get(rid, []) for rid in repair_ids}
+        worker = BatchRepairWorker(self.env, items)
+        worker.progress.connect(self._on_batch_progress)
+        worker.finished.connect(self._after_fixes)
+        worker.failed.connect(self._on_repair_failed)
+        self._set_repair_running(True)
+        n = len(repair_ids)
+        self.busy_text.setText(
+            f"<b>Fixing: {n} fix{'es' if n != 1 else ''} running</b> - this can take a while. "
+            "You can keep using your computer."
+        )
+        self.busy_text.setTextFormat(Qt.TextFormat.RichText)
+        self._start(worker)
+
+    def _on_batch_progress(self, i: int, total: int, name: str) -> None:
+        self.busy_text.setText(
+            f"<b>Fixing ({min(i + 1, total)} of {total}):</b> {html.escape(name)}. "
+            "You can keep using your computer."
+        )
 
     def _set_repair_running(self, running: bool, rid: str | None = None) -> None:
         self._repair_running = running
@@ -1016,26 +1080,47 @@ class MainWindow(QMainWindow):
             text += "\n\nWhat to do next:\n" + "\n".join(f"• {s}" for s in outcome.follow_up)
         return title, text
 
-    def _on_repair_finished(self, outcome) -> None:
+    def _after_fixes(self, outcomes: list) -> None:
+        """Show results, mark problems fixed, and scan again to show what changed."""
         self._set_repair_running(False)
-        title, text = self._result_words(outcome)
+        self._refresh_history()
+        targets, self._fix_targets = self._fix_targets, {}
+        good = {"success", "simulated"}
+        if len(outcomes) == 1:
+            title, text = self._result_words(outcomes[0])
+        else:
+            ok = sum(1 for o in outcomes if o.status in good)
+            title = f"Fix everything: {ok} of {len(outcomes)} done"
+            lines = []
+            for o in outcomes:
+                mark = "\u2713" if o.status in good else "\u2717"
+                msg = o.message
+                if o.status == "simulated":
+                    msg = "Practice run (demo) - nothing really happened."
+                lines.append(f"{mark} {friendly.repair_name(o.repair_id)}: {msg}")
+                lines += [f"     Next: {step}" for step in o.follow_up]
+            text = "\n".join(lines)
         self.last_result.layout().itemAt(0).widget().setText(
             f"<b>{html.escape(title)}</b><br>{html.escape(text).replace(chr(10), '<br>')}"
         )
         self.last_result.setVisible(True)
-        self._refresh_history()
-        worked = outcome.status in ("success", "simulated")
-        fid, self._fix_for = self._fix_for, None
-        recheck = worked and self.report is not None and self._scan_worker is None
+        worked = [o for o in outcomes if o.status in good]
+        recheck = bool(worked) and self.report is not None and self._scan_worker is None
         if recheck:
-            # Remember what needed attention before, to show what the fix changed.
+            # Remember what needed attention before, to show what the fixes changed.
             self._recheck_before = {f.id: friendly.headline(f) for f in self.triaged().problems}
-        if worked and fid:
-            f = self._finding(fid)
-            if f is not None and is_event(f):
-                self.settings.resolved[fid] = datetime.now(timezone.utc).isoformat()
-                self.settings.save(self.env.settings_path)
-        self.repair_completed.emit(outcome)
+        now = datetime.now(timezone.utc).isoformat()
+        changed = False
+        for o in worked:
+            for fid in targets.get(o.repair_id, []):
+                f = self._finding(fid)
+                if f is not None and is_event(f):
+                    self.settings.resolved[fid] = now
+                    changed = True
+        if changed:
+            self.settings.save(self.env.settings_path)
+        for o in outcomes:
+            self.repair_completed.emit(o)
         if QApplication.platformName() != "offscreen" and self.isVisible():
             QMessageBox.information(self, title, text)
         if recheck:

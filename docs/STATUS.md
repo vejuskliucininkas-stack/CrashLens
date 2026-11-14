@@ -4,7 +4,7 @@ Version 0.1.0. Updated as work lands.
 
 ## How it has been tested
 
-- 147 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
+- 155 automated tests (unit, CLI, headless GUI) pass on Linux with recorded /
   fictional Windows data (`FakeRunner`, demo mode).
 - The .exe is built, self-tested and run against a real Windows machine (GitHub's
   Windows Server 2025 runner) on every change. Testing on the owner's own PC has started.
@@ -68,7 +68,9 @@ App
       re-checks and lists what was fixed
 - [x] Real fixes: clean temporary files, check for updates now, reset Windows Update,
       re-detect devices, update virus protection, quick virus scan
-- [x] Admin fixes run hidden after the Windows permission prompt; their result is read
+- [x] "Fix everything": one button runs every automatic fix (restore point first),
+      lists what the person must do themselves, asks once, then re-checks
+- [x] Admin fixes run hidden after ONE Windows permission prompt (batched); their result is read
       back and explained in the app
 - [x] Pages: Home, Fix tools, Get help (reports), Settings, Details (experts only)
 - [x] Background scanning with progress and cancel

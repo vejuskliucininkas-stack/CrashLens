@@ -56,3 +56,27 @@ class RepairWorker(QObject):
             self.failed.emit(str(exc))
             return
         self.finished.emit(outcome)
+
+
+class BatchRepairWorker(QObject):
+    """Runs several approved fixes; admin ones share one Windows permission prompt."""
+
+    progress = Signal(int, int, str)
+    finished = Signal(object)  # list[RepairOutcome]
+    failed = Signal(str)
+
+    def __init__(self, env: Environment, items: list[tuple[str, Approval]]) -> None:
+        super().__init__()
+        self.env = env
+        self.items = items
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            outcomes = self.env.executor.execute_many(
+                self.items, progress=lambda i, t, n: self.progress.emit(i, t, n)
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(outcomes)
