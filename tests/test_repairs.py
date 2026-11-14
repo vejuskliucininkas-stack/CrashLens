@@ -298,14 +298,15 @@ def test_timeout_and_missing_tool(tmp_path):
     assert res.status == "failed" and "not found" in res.message
 
 
-def test_elevated_script_is_encoded_and_quote_safe():
+def test_elevated_script_is_encoded_and_quote_safe(tmp_path):
     from crashlens.repairs.executor import elevated_batch_argv
 
-    argv = elevated_batch_argv([(REPAIRS["sfc_scan"], Path("/x/O'Brien; rm -rf/log.txt"))])
+    log = tmp_path / "O'Brien; rm -rf" / "log.txt"
+    argv = elevated_batch_argv([(REPAIRS["sfc_scan"], log)])
     outer = argv[-1]
     assert "O'Brien" not in outer  # path only inside the encoded part
     script = decoded_script(argv)
-    assert "-FilePath '/x/O''Brien; rm -rf/log.txt'" in script
+    assert "-FilePath '" + str(log).replace("'", "''") + "'" in script
     with pytest.raises(ValueError):
         elevated_batch_argv([(REPAIRS["sfc_scan"], Path("relative.txt"))])
     with pytest.raises(ValueError):
